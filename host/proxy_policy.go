@@ -340,11 +340,14 @@ func sameProxyPrefs(a, b *ipn.Prefs) bool {
 
 // Profile changes reuse tsnet. Advance the session generation and discard
 // profile-scoped caches before switching, then restart the watcher afterwards
-// so no state from the previous profile remains reachable.
+// so no state from the previous profile remains reachable. The caller must
+// defer the returned function to reopen web admission after the mutation.
 func (h *Host) beginProxyProfileChange(lc *local.Client) func() {
+	finishWebChange := h.beginWebSessionChange()
 	h.sessionMu.Lock()
 	if h.lc != lc {
 		h.sessionMu.Unlock()
+		finishWebChange()
 		return func() {}
 	}
 	oldCancel := h.watchCancel
@@ -358,6 +361,7 @@ func (h *Host) beginProxyProfileChange(lc *local.Client) func() {
 		oldCancel()
 	}
 	return func() {
+		defer finishWebChange()
 		ctx, cancel := context.WithCancel(context.Background())
 		h.sessionMu.Lock()
 		if h.lc != lc || h.sessionGeneration != generation {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/netip"
 	"net/url"
 	"os"
@@ -77,8 +78,13 @@ type Host struct {
 	activeTransfers  map[uint64]context.CancelFunc
 	nextTransferID   uint64
 
-	webMu    sync.Mutex
-	webCache *webServerCache
+	// webMu protects cached authorization and request admission. Transitions
+	// stop admission and drain webRequests before replacing the active identity.
+	webMu       sync.Mutex
+	webCache    *webServerCache
+	webChanging bool
+	webActive   map[*http.Request]func()
+	webRequests sync.WaitGroup
 
 	proxyAuth     *ProxyAuth
 	proxyListener net.Listener
@@ -376,6 +382,8 @@ func (h *Host) handleInit(req Request) {
 		})
 		return
 	}
+	finishWebChange := h.beginWebSessionChange()
+	defer finishWebChange()
 
 	// Atomically detach the old session before closing it so proxy and status
 	// goroutines never race against partially replaced fields.
@@ -915,8 +923,12 @@ func (h *Host) handleSetPrefs(req Request) {
 		return
 	}
 
-	if partial.WantRunning != nil {
+	if partial.WantRunning != nil || controlURLChanged {
 		h.cancelStartupCorrection()
+	}
+	if controlURLChanged {
+		finishProfileChange := h.beginProxyProfileChange(lc)
+		defer finishProfileChange()
 	}
 
 	updatedPrefs, err := lc.EditPrefs(ctx, mp)
@@ -1041,6 +1053,9 @@ func (h *Host) isCurrentSession(lc *local.Client, generation uint64) bool {
 }
 
 func (h *Host) shutdownSession() {
+	finishWebChange := h.beginWebSessionChange()
+	defer finishWebChange()
+
 	h.sessionMu.Lock()
 	server := h.ts
 	cancelWatch := h.watchCancel

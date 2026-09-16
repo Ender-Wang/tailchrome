@@ -117,6 +117,12 @@ func (h *Host) httpProxyHandler() http.Handler {
 		// request as originating from this tsnet node before the web client runs
 		// its separate control-plane authorization flow.
 		if host == "100.100.100.100" {
+			r, finish, ok := h.beginWebRequest(w, r)
+			if !ok {
+				http.Error(w, "Tailscale web client session is changing", http.StatusServiceUnavailable)
+				return
+			}
+			defer finish()
 			webServer, remoteAddr, err := h.currentWebServer(r.Context())
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -137,6 +143,69 @@ func (h *Host) httpProxyHandler() http.Handler {
 		// Forward regular HTTP requests through tsnet.
 		proxy.ServeHTTP(w, r)
 	})
+}
+
+// beginWebRequest keeps the request attached to its current identity until the
+// handler has finished, including any synchronous LocalAPI mutation.
+func (h *Host) beginWebRequest(w http.ResponseWriter, r *http.Request) (*http.Request, func(), bool) {
+	h.webMu.Lock()
+	defer h.webMu.Unlock()
+	if h.webChanging {
+		return r, nil, false
+	}
+	requestCtx := r.Context()
+	readOnly := r.Method == http.MethodGet || r.Method == http.MethodHead
+	if !readOnly {
+		// An I/O deadline or disconnect also cancels the connection context.
+		// Preserve mutation completion even then: canceling LocalAPI early
+		// could let it keep writing after this handler has left the gate.
+		requestCtx = context.WithoutCancel(requestCtx)
+	}
+	ctx, cancel := context.WithCancel(requestCtx)
+	r = r.WithContext(ctx)
+	controller := http.NewResponseController(w)
+	if h.webActive == nil {
+		h.webActive = make(map[*http.Request]func())
+	}
+	h.webActive[r] = func() {
+		// Auth waits can block indefinitely. Cancel read-only requests, but
+		// let an already submitted mutation finish before changing identity.
+		if readOnly {
+			cancel()
+		}
+		// Context cancellation alone cannot interrupt a stalled request body
+		// or response write. Deadlines unblock the HTTP connection's I/O.
+		controller.SetReadDeadline(time.Now())
+		controller.SetWriteDeadline(time.Now())
+	}
+	h.webRequests.Add(1)
+	return r, func() {
+		cancel()
+		h.webMu.Lock()
+		delete(h.webActive, r)
+		controller.SetReadDeadline(time.Time{})
+		controller.SetWriteDeadline(time.Time{})
+		h.webMu.Unlock()
+		h.webRequests.Done()
+	}, true
+}
+
+// beginWebSessionChange is called by the serialized native-command dispatcher.
+// Stop admission, interrupt slow clients, and drain handlers before changing
+// identity. The returned function reopens admission after the entire transition.
+func (h *Host) beginWebSessionChange() func() {
+	h.webMu.Lock()
+	h.webChanging = true
+	for _, interrupt := range h.webActive {
+		interrupt()
+	}
+	h.webMu.Unlock()
+	h.webRequests.Wait()
+	return func() {
+		h.webMu.Lock()
+		h.webChanging = false
+		h.webMu.Unlock()
+	}
 }
 
 func (h *Host) currentWebServer(ctx context.Context) (*web.Server, string, error) {

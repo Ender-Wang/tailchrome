@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,19 +66,35 @@ func TestHTTPProxyServesAuthenticatedWebClient(t *testing.T) {
 		t.Fatal("initial notification did not include a network map")
 	}
 
-	h := newHost(nil, nil)
+	h := newHost(nil, io.Discard)
 	h.ts = node
 	h.lc = lc
 	h.sessionGeneration = 1
 	h.lastNetMap = notify.NetMap
 	h.proxyAuth = &ProxyAuth{Version: 1, Username: "test", Password: "test-password"}
+	t.Cleanup(func() {
+		h.sessionMu.Lock()
+		if h.watchCancel != nil {
+			h.watchCancel()
+		}
+		h.sessionMu.Unlock()
+		h.clearWebServer()
+	})
+	var webCookie *http.Cookie
+	newRequest := func(method, path string, body io.Reader) *http.Request {
+		req := httptest.NewRequest(method, "http://100.100.100.100"+path, body).WithContext(ctx)
+		req.Host = "100.100.100.100"
+		req.Header.Set("Proxy-Authorization", "Basic dGVzdDp0ZXN0LXBhc3N3b3Jk")
+		if webCookie != nil {
+			req.AddCookie(webCookie)
+		}
+		return req
+	}
+	handler := h.httpProxyHandler()
 	request := func(path string) *httptest.ResponseRecorder {
 		t.Helper()
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "http://100.100.100.100"+path, nil)
-		req.Host = "100.100.100.100"
-		req.Header.Set("Proxy-Authorization", "Basic dGVzdDp0ZXN0LXBhc3N3b3Jk")
-		h.httpProxyHandler().ServeHTTP(recorder, req)
+		handler.ServeHTTP(recorder, newRequest(http.MethodGet, path, nil))
 		return recorder
 	}
 
@@ -118,11 +136,135 @@ func TestHTTPProxyServesAuthenticatedWebClient(t *testing.T) {
 		t.Fatalf("wait auth response = %+v, want complete", waitAuth)
 	}
 
+	newSession := request("/api/auth/session/new")
+	if newSession.Code != http.StatusOK {
+		t.Fatalf("new session status = %d; body: %s", newSession.Code, newSession.Body.String())
+	}
+	for _, cookie := range newSession.Result().Cookies() {
+		if cookie.Name == "TS-Web-Session" {
+			webCookie = cookie
+			break
+		}
+	}
+	if webCookie == nil {
+		t.Fatal("web authentication did not issue a session cookie")
+	}
+	if waitSession := request("/api/auth/session/wait"); waitSession.Code != http.StatusOK {
+		t.Fatalf("wait session status = %d; body: %s", waitSession.Code, waitSession.Body.String())
+	}
+
 	if h.webCache == nil {
 		t.Fatal("web server was not cached")
 	}
-	h.beginProxyProfileChange(lc)
+	previousCache := h.webCache
+	readStarted := make(chan struct{})
+	releaseBody := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseBody) }) }
+	t.Cleanup(release)
+	body := &pausedWebRequestBody{
+		reader:  strings.NewReader(`{"RunSSHSet":true,"RunSSH":false}`),
+		started: readStarted,
+		release: releaseBody,
+	}
+	patch := newRequest(http.MethodPatch, "/api/local/v0/prefs", body)
+	patch.Header.Set("Content-Type", "application/json")
+	patch.Header.Set("Sec-Fetch-Site", "same-origin")
+	patchResponse := httptest.NewRecorder()
+	patchDone := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(patchResponse, patch)
+		close(patchDone)
+	}()
+	select {
+	case <-readStarted:
+		// web.Server authenticates the cookie and selects the peer's
+		// capabilities before it starts decoding the PATCH body.
+	case <-patchDone:
+		t.Fatalf("PATCH finished before reading its body: status %d; body: %s", patchResponse.Code, patchResponse.Body.String())
+	case <-ctx.Done():
+		t.Fatal("authenticated PATCH did not start reading its body")
+	}
+
+	changed := make(chan func(), 1)
+	go func() { changed <- h.beginProxyProfileChange(lc) }()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		h.webMu.Lock()
+		changing := h.webChanging
+		h.webMu.Unlock()
+		if changing {
+			break
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			t.Fatal("profile change did not start draining web requests")
+		}
+	}
+	if _, _, generation := h.sessionSnapshot(); generation != 1 {
+		t.Fatalf("generation advanced to %d before the authenticated PATCH completed", generation)
+	}
+	select {
+	case <-changed:
+		t.Fatal("profile change completed while the authenticated PATCH body was paused")
+	default:
+	}
+
+	// A ResponseRecorder cannot interrupt body reads through I/O deadlines.
+	// The profile change must therefore drain this request through its
+	// synchronous preference mutation before advancing the generation.
+	release()
+	select {
+	case <-patchDone:
+	case <-ctx.Done():
+		t.Fatal("authenticated PATCH did not finish after its body was released")
+	}
+	if patchResponse.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want %d; body: %s", patchResponse.Code, http.StatusOK, patchResponse.Body.String())
+	}
+	var finishChange func()
+	select {
+	case finishChange = <-changed:
+	case <-ctx.Done():
+		t.Fatal("profile change did not finish draining the authenticated PATCH")
+	}
+	var finishOnce sync.Once
+	finish := func() { finishOnce.Do(finishChange) }
+	t.Cleanup(finish)
 	if h.webCache != nil {
 		t.Fatal("profile change retained the previous profile's web server")
 	}
+	if _, _, generation := h.sessionSnapshot(); generation != 2 {
+		t.Fatalf("generation after the PATCH completed = %d, want 2", generation)
+	}
+	finish()
+
+	staleResponse := httptest.NewRecorder()
+	stalePatch := newRequest(http.MethodPatch, "/api/local/v0/prefs", strings.NewReader(`{"RunSSHSet":true,"RunSSH":false}`))
+	stalePatch.Header.Set("Content-Type", "application/json")
+	stalePatch.Header.Set("Sec-Fetch-Site", "same-origin")
+	handler.ServeHTTP(staleResponse, stalePatch)
+	if staleResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("old session cookie status = %d, want %d; body: %s", staleResponse.Code, http.StatusUnauthorized, staleResponse.Body.String())
+	}
+	if h.webCache == nil || h.webCache == previousCache {
+		t.Fatal("profile change did not create a fresh web server")
+	}
+}
+
+type pausedWebRequestBody struct {
+	reader  io.Reader
+	started chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (b *pausedWebRequestBody) Read(p []byte) (int, error) {
+	b.once.Do(func() {
+		close(b.started)
+		<-b.release
+	})
+	return b.reader.Read(p)
 }
