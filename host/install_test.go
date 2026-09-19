@@ -60,6 +60,8 @@ func TestChromiumManifestDirsContainsExpectedTargets(t *testing.T) {
 
 func TestChromiumManifestDirsAllUnderHome(t *testing.T) {
 	t.Setenv("HOME", "/tmp/fakehome-tailchrome-test")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("CHROME_CONFIG_HOME", "")
 	dirs := chromiumManifestDirs()
 	for _, d := range dirs {
 		if d.Dir == "" {
