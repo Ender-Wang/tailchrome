@@ -220,10 +220,14 @@ describe("renderInstallFlow", () => {
     const processLike = (
       globalThis as typeof globalThis & {
         process?: {
+          platform?: string;
           getBuiltinModule?: (name: string) => unknown;
         };
       }
     ).process;
+    if (processLike?.platform !== "win32") {
+      return;
+    }
     const childProcess = processLike?.getBuiltinModule?.(
       "node:child_process",
     ) as ChildProcessModule | undefined;
