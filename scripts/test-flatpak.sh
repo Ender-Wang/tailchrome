@@ -15,9 +15,33 @@ log_path="${repo_dir}/.context/flatpak-smoke.log"
 tmp_dir=$(mktemp -d)
 helper_path="${tmp_dir}/tailchrome"
 install_completed=0
+flatpak_started=0
 
 cleanup() {
 	status=$?
+	if [[ "$flatpak_started" == 1 ]]; then
+		if flatpak ps --columns=application | awk -v id="$app_id" '$0 == id { found=1 } END { exit found ? 0 : 1 }'; then
+			if ! flatpak kill "$app_id" >>"$log_path" 2>&1; then
+				if [[ "$status" == 0 ]]; then
+					status=1
+				fi
+				echo "ERROR: Flatpak smoke could not stop the Chrome instance it started; see $log_path" >&2
+			else
+				for _ in {1..40}; do
+					if ! flatpak ps --columns=application | awk -v id="$app_id" '$0 == id { found=1 } END { exit found ? 0 : 1 }'; then
+						break
+					fi
+					sleep 0.25
+				done
+				if flatpak ps --columns=application | awk -v id="$app_id" '$0 == id { found=1 } END { exit found ? 0 : 1 }'; then
+					if [[ "$status" == 0 ]]; then
+						status=1
+					fi
+					echo "ERROR: Chrome Flatpak remained active after smoke cleanup; see $log_path" >&2
+				fi
+			fi
+		fi
+	fi
 	if [[ "$install_completed" == 1 ]]; then
 		if ! "$helper_path" uninstall --chrome-flatpak >>"$log_path" 2>&1; then
 			if [[ "$status" == 0 ]]; then
@@ -82,6 +106,7 @@ export TAILCHROME_SMOKE_APP_ID="$app_id"
 export TAILCHROME_SMOKE_HELPER="$host_path"
 export TAILCHROME_SMOKE_LOG="$log_path"
 export TAILCHROME_SMOKE_FLATPAK_SCOPE="${flatpak_scope[0]}"
+flatpak_started=1
 python3 - <<'PY'
 import json
 import os
