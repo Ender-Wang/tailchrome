@@ -29,7 +29,7 @@ jobs:
           # The launch above initializes the app's writable sandbox home. The
           # smoke script intentionally refuses to touch an app instance it did
           # not start, so stop the clean instance created by this setup step.
-          flatpak --user kill com.google.Chrome || true
+          flatpak kill com.google.Chrome || true
       - name: Verify helper framing inside the sandbox
         run: dbus-run-session -- bash scripts/test-flatpak.sh
       - name: Retain smoke diagnostics
