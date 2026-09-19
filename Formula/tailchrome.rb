@@ -28,7 +28,7 @@ class Tailchrome < Formula
     if File.executable?(helper.to_s)
       begin
         supports_install_command = Utils.safe_popen_read(helper.to_s, "--help", err: :out).include?("--binary-path")
-      rescue StandardError
+      rescue
         # A pinned legacy helper may reject the new help form; retain its flags.
         supports_install_command = false
       end
@@ -63,7 +63,7 @@ class Tailchrome < Formula
 
   test do
     assert_equal "v#{version}", shell_output("#{bin}/tailscale-browser-ext -version").strip
-    supports_install_command = shell_output("#{bin}/tailscale-browser-ext --help 2>&1", 0).include?("--binary-path")
+    supports_install_command = shell_output("#{bin}/tailscale-browser-ext --help 2>&1").include?("--binary-path")
     if supports_install_command
       system bin/"tailscale-browser-ext", "install", "--binary-path", opt_bin/"tailscale-browser-ext"
     else
