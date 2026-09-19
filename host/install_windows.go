@@ -270,8 +270,11 @@ func replaceBinary(destPath string, src io.Reader, perm os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	// Hold a write-denying handle through activation. A mapped image cannot be
-	// opened with this share mode, and a late opener cannot race the replace.
+	// Probe with write access before activation. A mapped image cannot be opened
+	// with this access, so a running browser is rejected before the destination
+	// is touched. The probe must close before MoveFileEx: Windows otherwise
+	// rejects replacement because the probe's share mode denies its own
+	// replacement operation.
 	h, err := windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.FILE_SHARE_READ|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
 	if err != nil {
 		if isWindowsInUseError(err) {
@@ -282,11 +285,19 @@ func replaceBinary(destPath string, src io.Reader, perm os.FileMode) error {
 		}
 		return fmt.Errorf("open destination executable: %w", err)
 	}
-	defer windows.CloseHandle(h)
+	defer func() {
+		if h != 0 {
+			_ = windows.CloseHandle(h)
+		}
+	}()
 	stagePtr, err := windows.UTF16PtrFromString(stage)
 	if err != nil {
 		return err
 	}
+	if err := windows.CloseHandle(h); err != nil {
+		return fmt.Errorf("close destination executable probe: %w", err)
+	}
+	h = 0
 	if err := windows.MoveFileEx(stagePtr, p, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH); err != nil {
 		return fmt.Errorf("activate replacement executable: %w", err)
 	}

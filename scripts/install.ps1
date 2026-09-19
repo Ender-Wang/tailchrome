@@ -145,6 +145,18 @@ function Get-Checksum([string]$ManifestPath, [string]$AssetName) {
   return $checksumMatches[0]
 }
 
+function Get-Sha256Hex([string]$Path) {
+  $algorithm = [System.Security.Cryptography.SHA256]::Create()
+  $stream = $null
+  try {
+    $stream = [System.IO.File]::OpenRead($Path)
+    return ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+  } finally {
+    if ($stream) { $stream.Dispose() }
+    $algorithm.Dispose()
+  }
+}
+
 function Invoke-Download([string]$Uri, [string]$Path) {
   if ($Uri -notmatch '^https://') {
     Fail "Release URL must use HTTPS: $Uri"
@@ -324,7 +336,7 @@ $releaseBase = "$ReleaseBaseDefault/$Version"
   $expectedHash = Get-Checksum $manifestPath $asset
   Invoke-Download "$releaseBase/$asset" $artifactPath
 
-  $actualHash = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $actualHash = Get-Sha256Hex $artifactPath
   if ($actualHash -cne $expectedHash) {
     Fail 'SHA-256 checksum verification failed.'
   }

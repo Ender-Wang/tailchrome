@@ -43,7 +43,7 @@ function New-Fixture {
 }
 function Set-Manifest {
   $asset = 'tailscale-browser-ext-windows-' + $script:TestArch + '.exe'
-  $hash = (Get-FileHash -LiteralPath (Join-Path $script:Fixture 'artifact') -Algorithm SHA256).Hash
+  $hash = Get-Sha256Hex (Join-Path $script:Fixture 'artifact')
   "$hash  $asset" | Set-Content -LiteralPath (Join-Path $script:Fixture 'manifest')
 }
 function Assert-SupportedPlatform { }
