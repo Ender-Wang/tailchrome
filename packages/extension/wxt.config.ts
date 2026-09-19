@@ -135,7 +135,7 @@ export default defineConfig({
     manifest.browser_specific_settings = {
       gecko: {
         id: extensionIds.firefoxAddonId,
-        strict_min_version: "140.0",
+        strict_min_version: "142.0",
         ...(isFirefoxDisclosureReady(firefoxDisclosure)
           ? {
               data_collection_permissions:

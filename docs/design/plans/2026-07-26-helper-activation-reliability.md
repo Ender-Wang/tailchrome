@@ -1,5 +1,12 @@
 # Helper Activation Reliability Implementation Plan
 
+> Historical implementation plan. The v0.1.14 helper-install work supersedes
+> package-first presentation and mandatory user-supplied version pinning with
+> the [current installation contract](../../helper-installation.md). Its new
+> registration CLI points at installer-owned executables; legacy flags remain
+> compatible. Existing release verification and explicit signing-mode gates
+> continue to apply as documented in the current release workflow and policy.
+
 **Goal:** Make helper setup and recovery dependable across supported platforms by distinguishing registration, permission, launch, runtime, and compatibility failures; keeping package installers primary; providing a verified per-user repair fallback; shipping a Linux ARM64 raw helper; and publishing Windows artifacts only after one stable publisher identity, valid signatures, and exact-artifact security checks are in place.
 
 **Architecture:** Keep the native helper as the execution boundary. The extension observes native-messaging evidence, maps it to a typed failure category, and presents recovery steps that the evidence supports. Existing capability flags gate individual features; helper version differences only produce a non-blocking notice. Linux packages continue to own system files, while a version-pinned script provides an explicit per-user repair path after package discovery fails. The release workflow assembles immutable final candidates, verifies every signature and embedded payload, pauses for exact-hash security clearance, and only then publishes one coordinated release.

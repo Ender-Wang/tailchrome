@@ -43,7 +43,7 @@ export const cases = [
       const page = await openPopup();
       try {
         await waitForPopup(page);
-        await expectText(page, "Quick Setup");
+        await expectText(page, "Set up Tailchrome");
         await expectText(
           page,
           "Tailchrome could not find a registered helper for this browser.",
@@ -65,7 +65,7 @@ export const cases = [
           "Helper 0.0.11 is older than companion release",
         );
         await expectText(page, "example.ts.net");
-        await expectNoText(page, "Quick Setup");
+        await expectNoText(page, "Set up Tailchrome");
       } finally {
         await page.close();
       }
@@ -226,7 +226,7 @@ export const cases = [
         );
         await clickText(page, "Retry discovery");
         await expectText(page, "example.ts.net");
-        await expectNoText(page, "Quick Setup");
+        await expectNoText(page, "Set up Tailchrome");
       } finally {
         await page.close();
       }

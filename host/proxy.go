@@ -14,6 +14,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"tailscale.com/client/local"
@@ -117,6 +118,12 @@ func (h *Host) httpProxyHandler() http.Handler {
 		// request as originating from this tsnet node before the web client runs
 		// its separate control-plane authorization flow.
 		if host == "100.100.100.100" {
+			if r.Method == http.MethodPost && r.URL.Path == "/api/local/v0/logout" {
+				h.commandMu.Lock()
+				defer h.commandMu.Unlock()
+				h.handleWebLogoutLocked(w, r)
+				return
+			}
 			r, finish, ok := h.beginWebRequest(w, r)
 			if !ok {
 				http.Error(w, "Tailscale web client session is changing", http.StatusServiceUnavailable)
@@ -143,6 +150,110 @@ func (h *Host) httpProxyHandler() http.Handler {
 		// Forward regular HTTP requests through tsnet.
 		proxy.ServeHTTP(w, r)
 	})
+}
+
+// handleWebLogout runs the web client's authenticated logout as an account
+// transition. The logout request itself is deliberately not admitted through
+// beginWebRequest: waiting for a web request count that includes this handler
+// would deadlock. The web.Server still performs the normal browser-session,
+// capability, and CSRF checks before its LocalAPI logout call.
+func (h *Host) handleWebLogoutLocked(w http.ResponseWriter, r *http.Request) {
+	_, lc, _ := h.sessionSnapshot()
+	if lc == nil {
+		http.Error(w, "Tailscale web client is not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	finishWebChange := h.beginWebSessionChange()
+	var restartWatcher func()
+	transition := &webLogoutTransition{
+		beforeLogout: func() error {
+			h.cancelStartupCorrection()
+			restartWatcher = h.beginProxyProfileChangeLocked(lc, finishWebChange)
+			return nil
+		},
+	}
+	defer func() {
+		if restartWatcher != nil {
+			restartWatcher()
+		} else {
+			finishWebChange()
+		}
+	}()
+	webServer, remoteAddr, err := h.currentWebServer(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	r.Header.Set("Sec-Tailscale", "browser-ext")
+	r.RemoteAddr = remoteAddr
+	r = r.WithContext(context.WithValue(r.Context(), webLogoutTransitionKey{}, transition))
+	webServer.ServeHTTP(w, r)
+}
+
+type webLogoutTransitionKey struct{}
+
+type webLogoutTransition struct {
+	beforeLogout func() error
+	once         sync.Once
+	err          error
+}
+
+func (t *webLogoutTransition) begin() error {
+	t.once.Do(func() { t.err = t.beforeLogout() })
+	return t.err
+}
+
+// newWebLocalClient gives each web.Server a fresh local.Client whose transport
+// delegates to the already-initialized client. It is intentionally not a copy
+// of the original local.Client: that type contains sync.Once state. The
+// wrapper observes the serialized, authenticated logout request at the HTTP
+// boundary immediately before delegating it to the original client.
+func newWebLocalClient(original *local.Client) *local.Client {
+	return &local.Client{
+		OmitAuth:  true,
+		Transport: webLocalRoundTripper{original: original},
+	}
+}
+
+type webLocalRoundTripper struct {
+	original *local.Client
+}
+
+func (t webLocalRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Method == http.MethodPost && req.URL.Path == "/localapi/v0/logout" {
+		transition, ok := req.Context().Value(webLogoutTransitionKey{}).(*webLogoutTransition)
+		if !ok {
+			err := fmt.Errorf("web logout missing transition context")
+			return webLocalAPIErrorResponse(http.StatusForbidden, err), nil
+		}
+		if err := transition.begin(); err != nil {
+			return webLocalAPIErrorResponse(http.StatusServiceUnavailable, err), nil
+		}
+		// The web.Server has already completed browser-session, CSRF, and
+		// capability checks. Preserve this submitted identity mutation even if
+		// the browser disconnects while LocalAPI is processing it.
+		req = req.WithContext(context.WithoutCancel(req.Context()))
+	}
+	response, err := t.original.DoLocalRequest(req)
+	if err != nil {
+		if response == nil {
+			response = webLocalAPIErrorResponse(http.StatusBadGateway, err)
+		}
+		return response, nil
+	}
+	return response, nil
+}
+
+func webLocalAPIErrorResponse(status int, err error) *http.Response {
+	body := err.Error() + "\n"
+	return &http.Response{
+		StatusCode:    status,
+		Status:        fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		Header:        http.Header{"Content-Type": {"text/plain; charset=utf-8"}},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+	}
 }
 
 // beginWebRequest keeps the request attached to its current identity until the
@@ -190,9 +301,10 @@ func (h *Host) beginWebRequest(w http.ResponseWriter, r *http.Request) (*http.Re
 	}, true
 }
 
-// beginWebSessionChange is called by the serialized native-command dispatcher.
-// Stop admission, interrupt slow clients, and drain handlers before changing
-// identity. The returned function reopens admission after the entire transition.
+// beginWebSessionChange is called while commandMu serializes native commands,
+// web logout, and shutdown. It stops admission, interrupts slow clients, and
+// drains handlers before changing identity. The returned function reopens
+// admission after the entire transition.
 func (h *Host) beginWebSessionChange() func() {
 	h.webMu.Lock()
 	h.webChanging = true
@@ -234,7 +346,7 @@ func (h *Host) currentWebServer(ctx context.Context) (*web.Server, string, error
 	}
 	server, err := web.NewServer(web.ServerOpts{
 		Mode:        web.ManageServerMode,
-		LocalClient: lc,
+		LocalClient: newWebLocalClient(lc),
 		Logf:        log.Printf,
 		NewAuthURL: func(ctx context.Context, src tailcfg.NodeID) (*tailcfg.WebClientAuthResponse, error) {
 			return h.webClientAuthRequest(ctx, ts, lc, generation, "", src)

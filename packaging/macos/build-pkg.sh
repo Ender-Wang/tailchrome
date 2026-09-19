@@ -39,8 +39,8 @@ mkdir -p "$DIST_DIR" "$STAGE/pkgroot/Library/Application Support/Tailscale/Brows
 echo "Building universal binary (version $VERSION)..."
 (
   cd "$HOST_DIR"
-  GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "$HOST_LDFLAGS" -o "$STAGE/tailscale-browser-ext-arm64" .
-  GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$HOST_LDFLAGS" -o "$STAGE/tailscale-browser-ext-amd64" .
+  GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$HOST_LDFLAGS" -o "$STAGE/tailscale-browser-ext-arm64" .
+  GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$HOST_LDFLAGS" -o "$STAGE/tailscale-browser-ext-amd64" .
 )
 lipo -create -output "$STAGE/pkgroot/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext" \
   "$STAGE/tailscale-browser-ext-arm64" \

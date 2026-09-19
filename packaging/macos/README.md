@@ -4,7 +4,9 @@
 
 Download `tailchrome-helper-macos-user.zip` from the matching release, unzip it,
 and open **Tailchrome Helper**. The signed, notarized app includes the universal
-helper and installs it for your account. Keep the app to run setup again later.
+helper and establishes its stable location at `~/Applications/Tailchrome Helper.app`.
+Open that app again to repair registration. These instructions describe v0.1.14
+and later; older releases use their historical runtime-copy installer.
 It works on Apple Silicon and Intel Macs.
 
 Your organization’s browser policy may still block extensions or native messaging.
@@ -25,12 +27,13 @@ The script `build-pkg.sh` builds both installers. The system package
    `/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext`
 2. **Tailchrome Helper** in `/Applications` — a repair/re-run fallback app.
 
-The package postinstall script runs `tailscale-browser-ext -install-now` for the logged-in console user, so normal installs do not require opening the app manually.
+The package postinstall script registers its installed executable directly
+with `install --binary-path` for the logged-in console user.
 
 If browser discovery is later damaged, open
 `/Applications/Tailchrome Helper.app`. The signed app launches the installed
-system helper with `-install-now` and recreates the current user's supported
-native-messaging registrations.
+system helper with `install --binary-path` and recreates the current user's
+native-messaging registrations without copying the executable.
 
 ## Unsigned builds
 
@@ -95,10 +98,10 @@ Publication rechecks signatures and tickets without rebuilding.
 
 ## Per-user fallback
 
-For terminal setup or repair, the release also contains a version-pinned
-`tailchrome-install.sh` installer.
-Replace `vX.Y.Z` below with the exact extension release, then download, verify,
-inspect, and run the script:
+For terminal setup or repair, use the popup's version-pinned command or
+`tailchrome-install.sh` from a published release. The script defaults to latest
+stable and also accepts `--version vX.Y.Z`. To inspect it before running,
+replace `vX.Y.Z` below with the chosen release:
 
 ```bash
 VERSION=vX.Y.Z
@@ -125,19 +128,20 @@ boundary.
 The fallback installs the helper at:
 
 ```text
-$HOME/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext
+$HOME/.local/bin/tailchrome
 ```
 
-It invokes the verified helper with `-install-now`; the helper remains the
-authority for supported current-user browser registrations.
+It invokes the verified helper with `install --binary-path` at that final
+location. The app, script, system package and Homebrew are separate installation
+methods; choose one per account.
 
 ## Uninstall
 
-For a package install, first remove the current user's native-messaging
-registrations and runtime copy:
+For a system package, run this in each account before removing its payload:
 
 ```bash
-"/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext" -uninstall
+helper="/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext"
+"$helper" uninstall --binary-path "$helper"
 ```
 
 Then remove the system package payload and receipt:
@@ -149,19 +153,20 @@ sudo rm -rf "/Applications/Tailchrome Helper.app"
 sudo pkgutil --forget org.tesseras.tailchrome.helper
 ```
 
-Run the first command once in each macOS user account that used Tailchrome, because native-messaging registrations are per user.
-
-For a per-user app or script install, remove the installed helper and its registrations:
+For the per-user app:
 
 ```bash
-"$HOME/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext" -uninstall
+helper="$HOME/Applications/Tailchrome Helper.app/Contents/MacOS/tailscale-browser-ext"
+"$helper" uninstall --binary-path "$helper"
 ```
 
-You can then move the downloaded app to the Trash.
-
-The script can invoke the same command after validating the requested
-release version:
+Then move `~/Applications/Tailchrome Helper.app` to the Trash. For the script:
 
 ```bash
-bash ./tailchrome-install.sh --version vX.Y.Z --uninstall
+bash ./tailchrome-install.sh --uninstall
 ```
+
+These new commands preserve other methods' registrations and node identities.
+For v0.1.13 and older, use that release's `-uninstall` command before switching
+methods, or rerun the new method's registration afterward. See
+[helper installation](../../docs/helper-installation.md).

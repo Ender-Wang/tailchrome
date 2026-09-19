@@ -2,9 +2,9 @@
 
 > Access your Tailscale network directly from your browser. No system VPN required.
 
-**Version:** 0.1.13 (native host) | Manifest V3
+**Version:** 0.1.14 (native host) | Manifest V3
 **Browsers:** Chrome, Firefox
-**Platforms:** macOS (amd64, arm64), Linux (amd64 packages; amd64/arm64 raw helpers), Windows (amd64, including x64 emulation on Windows ARM64)
+**Platforms:** macOS (amd64, arm64), Linux (amd64 packages; amd64/arm64 raw helpers), Windows (amd64 MSI; amd64/arm64 raw helpers). Chrome Flatpak is an explicit Linux installation option
 **License:** MIT
 **Website:** [tesseras.org/tailchrome](https://tesseras.org/)
 **Chrome Web Store:** [Chrome Web Store](https://chromewebstore.google.com/detail/tailchrome/bhfeceecialgilpedkoflminjgcjljll)
@@ -302,7 +302,7 @@ The shared package contains all the platform-agnostic logic. The extension packa
 | `disconnected.ts` | Starting, reconnecting, stopped, and helper-error recovery states |
 | `needs-login.ts` | Login prompt and coordination-server settings |
 | `needs-install.ts` | Package installation and registration-repair entry point |
-| `install-helpers.ts` | Runtime platform/architecture selection, package-first instructions, and verified repair UI |
+| `install-helpers.ts` | Runtime platform/architecture selection, per-user setup, terminal commands, and registration recovery |
 
 
 `**packages/shared/src/popup/components/**`
@@ -392,7 +392,7 @@ The proxy uses Tailscale's `proxymux.SplitSOCKSAndHTTP()` to multiplex a single 
 
 - **SOCKS5 traffic** is handled by `tailscale.com/net/socks5`, with authentication and the helper's destination policy applied before dialing.
 - **HTTP traffic** is handled by an `httputil.ReverseProxy` with the same authentication and destination checks.
-- **Requests to `100.100.100.100`** are routed to the Tailscale web client (`web.Server` in `ManageServerMode`), with a `Sec-Tailscale: browser-ext` header for CSRF protection.
+- **Requests to `100.100.100.100`** are routed to the Tailscale web client (`web.Server` in `ManageServerMode`). Proxy authentication is checked first; the web client then enforces its own session, capability and CSRF checks.
 - **HTTPS CONNECT** requests are hijacked for bidirectional tunneling through tsnet.
 
 All three proxy paths resolve restricted DNS domains through configured IP nameservers, validating both the nameserver route and returned IPs against the current session's routing policy before dialing. The IPN watcher sends authoritative restricted domains as `dnsRoutes`, retaining `splitDNSDomains` for compatibility; disabling `corpDNS` or removing a route clears the corresponding browser routing. An omitted `dnsRoutes` field indicates that configuration is not yet known and preserves existing protection. See [Split DNS](split-dns.md) for setup and nameserver routing requirements.
@@ -401,7 +401,7 @@ The loopback proxy requires a fresh random credential on every helper launch. Ch
 
 ### Auto-Installation
 
-When the raw host binary is run in a terminal (detected via `term.IsTerminal`), it auto-detects installed browsers and installs native messaging manifests for Chrome-family browsers and Firefox. The binary copies itself to the per-user helper directory (`~/.local/share/tailscale/browser-ext/`, `~/Library/Application Support/Tailscale/BrowserExt/`, or `%LOCALAPPDATA%\Tailscale\BrowserExt\`) and writes JSON manifests to each browser's native messaging host location.
+Running the raw host without a command in a terminal retains legacy setup: it copies itself to the historical per-user helper directory and registers all supported browsers. New installers place the executable at their stable path and invoke `install --binary-path PATH`. This direct command registers Chrome, Firefox, and detected optional browsers without making another executable copy. See [helper installation](helper-installation.md) for explicit browser selection and legacy compatibility.
 
 ---
 
@@ -609,7 +609,7 @@ does not participate in routing.
 | State persistence | Local/session preferences plus alarm-backed reconnect | Session storage for proxy config restoration |
 | Native host ID    | `com.tailscale.browserext.chrome`                     | `com.tailscale.browserext.firefox`           |
 | Permissions       | `proxy`, `storage`, `nativeMessaging`, `contextMenus`, `alarms`, `sidePanel` | Same except `sidePanel`                     |
-| Min version       | --                                                    | Firefox 140+                                 |
+| Min version       | --                                                    | Firefox 142+                                 |
 | Distribution      | Chrome Web Store                                      | [Firefox Add-ons (AMO)](https://addons.mozilla.org/firefox/addon/tailchrome/) |
 | Extension ID      | `bhfeceecialgilpedkoflminjgcjljll` (CWS)              | `tailchrome@tesseras.org` (gecko)            |
 
@@ -631,40 +631,39 @@ does not participate in routing.
 **Chrome:**
 
 1. Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/tailchrome/bhfeceecialgilpedkoflminjgcjljll)
-2. Install the native helper from [GitHub Releases](https://github.com/dantraynor/tailchrome/releases/latest): **`tailchrome-helper-macos-user.zip`** on macOS, **`tailchrome-helper-windows-x64.msi`** on Windows, or the verified **`tailchrome-install.sh`** on Linux. These install for your account without administrator access.
+2. Follow the popup's per-user setup: the helper app on macOS, MSI on Windows x64, PowerShell installer on Windows ARM64, or terminal installer on Linux. The matching assets come from [GitHub Releases](https://github.com/dantraynor/tailchrome/releases/latest); [helper installation](helper-installation.md) documents the commands and alternatives.
 3. Log in to your Tailscale account
 
 **Firefox:**
 
 1. Install from [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/tailchrome/) or the matching [GitHub Release](https://github.com/dantraynor/tailchrome/releases/latest)
-2. Install the same native helper used for Chrome: the helper app on macOS, **`.msi`** on Windows, or the verified per-user installer on Linux.
+2. Follow the same per-user helper setup used for Chrome.
 3. Log in to your Tailscale account
 
 ### Native Host Installation
 
-The popup offers installation for your account. macOS and Linux amd64 also have system packages:
+The v0.1.14 helper separates binary placement from browser registration.
+`tailchrome install` registers the installed executable directly, prints paths,
+and supports custom extension IDs and browser targets. Chrome and Firefox are
+registered for first use; optional browsers use installation footprints unless
+explicitly requested. Linux registration honors XDG configuration paths.
 
-- **macOS:** open `tailchrome-helper-macos-user.zip`, then open the included **Tailchrome Helper** app to install for your account. The signed app includes a universal helper. For a system installation, `tailchrome-helper-macos.pkg` installs a universal binary and runs `tailscale-browser-ext -install-now` for the logged-in user during package postinstall. `Tailchrome Helper.app` remains in `/Applications` as a repair/re-run fallback.
-- **Windows:** the Authenticode-signed `tailchrome-helper-windows-x64.msi` embeds the identically signed raw EXE, installs a staged helper under `%LOCALAPPDATA%\Tailscale\BrowserExt\installer\`, and runs it with `-install-now`, which writes HKCU native messaging registrations. Windows ARM64 uses this package through x64 emulation. After downloading the MSI, repair from either Command Prompt or PowerShell with `powershell.exe -NoProfile -Command "msiexec.exe /fa (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads\tailchrome-helper-windows-x64.msi')"`; uninstall through **Installed apps**.
-- **Linux amd64:** `.deb` and `.rpm` packages install `/usr/lib/tailchrome/tailscale-browser-ext` plus system-wide manifests for Chrome, Chromium, Edge, and Firefox. They do not write per-user state in package hooks.
-- **Linux per-user (amd64/ARM64):** download `tailchrome-install.sh` from the exact versioned release, inspect it, download `SHA256SUMS.txt`, and run `bash ~/Downloads/tailchrome-install.sh --version "vX.Y.Z"`. The script selects and verifies the matching raw helper, optionally verifies its GitHub attestation when `gh` is available and authenticated, invokes `-install-now`, and confirms the installed executable. Never pipe a remote script directly into a shell.
+The Unix and PowerShell installers select a release and architecture, verify
+the artifact, replace the stable user-owned executable safely, and invoke this
+command. Latest stable is the general default; an explicit version remains
+available. macOS app, MSI, Homebrew and Linux system packages retain ownership
+of their own executable. Install and registration repair use the same entry
+point. Windows signature status follows the release's recorded signing mode;
+see [the policy](WINDOWS_CODE_SIGNING_POLICY.md).
 
-On macOS and Linux, the same version-pinned script also repairs current-user
-registration after package discovery fails. It selects the exact
-amd64/arm64 artifact for the machine. The raw native host binary remains
-available for advanced/manual installs. When run interactively in a terminal,
-or non-interactively via **`tailscale-browser-ext -install-now`**, it:
+Legacy installer flags remain compatible and retain their historical staging
+behavior. Existing native-host names and extension IDs are unchanged. The new
+`uninstall` command removes registrations owned by its executable; the installer
+or package manager removes the executable. Node state is preserved.
 
-- Detects installed browsers and writes per-browser manifests for the whole Chromium family (Chrome stable/beta/canary/dev, Chromium, Brave, Edge, Vivaldi, Opera, Arc on macOS) plus Firefox
-- Copies itself to `~/.local/share/tailscale/browser-ext/` (Linux), `~/Library/Application Support/Tailscale/BrowserExt/` (macOS), or `%LOCALAPPDATA%\Tailscale\BrowserExt\` (Windows)
-- Reports per-browser install status so unsupported or missing browsers are skipped cleanly
-- Manual install: `./tailscale-browser-ext --install C<extensionID>` (Chromium-family) or `--install F<extensionID>` (Firefox)
-- Uninstall the per-user helper by running the installed executable with
-  `-uninstall`: `~/.local/share/tailscale/browser-ext/tailscale-browser-ext`
-  on Linux or
-  `~/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext`
-  on macOS. The verified script also accepts `--uninstall` with the same
-  required release version and invokes this installed path.
+See [helper installation](helper-installation.md) for exact commands, executable
+paths, legacy behavior, safe upgrades, uninstall and Chrome Flatpak setup. The
+matching release's installer assets must exist before distributing its extension.
 
 ### State Directory
 
@@ -675,6 +674,11 @@ Per-profile Tailscale state is stored at:
 ```
 
 Each browser profile generates a UUID on first connection, stored in `chrome.storage.local` as `profileId`.
+
+Native installations keep this historical location even when browser manifest
+registration uses XDG paths. Chrome Flatpak uses its sandbox's writable XDG
+configuration directory for separate node state. Installing the sandbox helper
+does not migrate or delete native node identities.
 
 ---
 
@@ -760,7 +764,8 @@ tailchrome/
 |
 +-- scripts/
 |   +-- e2e/                         # Puppeteer runner, fixtures, native-host mock, scenarios
-|   +-- install.sh                   # Pinned, verified macOS/Linux repair installer
+|   +-- install.sh                   # Verified macOS/Linux per-user installer
+|   +-- install.ps1                  # Verified Windows amd64/ARM64 per-user installer
 |   +-- install.test.sh              # Hermetic installer tests
 |   +-- verify-windows-signatures.ps1 # Authenticode and embedded-EXE verifier
 |   +-- validate-extension-ids.mjs   # Extension/native manifest drift check
@@ -855,7 +860,7 @@ WXT (`packages/extension/wxt.config.ts`) handles:
 - Manifest V3 generation for Chrome and Firefox
 - Icon definitions (online, offline, warning states at 16/32/48/128px)
 - Chrome extension key for stable development ID
-- Firefox gecko settings (addon ID, `strict_min_version: "140.0"`, data collection permissions)
+- Firefox gecko settings (addon ID, `strict_min_version: "142.0"`, data collection permissions)
 - Source ZIP configuration for AMO review (allowlisted paths only)
 - Vite alias `@tailchrome/shared` -> `packages/shared/src`
 
@@ -872,7 +877,8 @@ SHA-pinned path filter enables host/packaging work only when relevant files
 change:
 
 - **host-build** (Linux): dependency download, `go vet`, race-enabled Go tests, and the native host build
-- **host-windows-tests**: Windows-specific Go tests
+- **host-windows-tests**: Windows-specific Go tests and PowerShell installer fixtures
+- **windows-arm64-smoke**: native ARM64 executable and installer checks
 - **package-linux**: amd64/arm64 raw builds with architecture checks plus `.deb` and `.rpm` generation with pinned nFPM and ownership-boundary inspection
 - **macos-package-smoke**: unsigned package smoke build that asserts the launchable `/Applications/Tailchrome Helper.app` payload
 - **windows-signature-verifier**: fixed-SDK positive/negative Authenticode verifier fixtures
@@ -884,12 +890,12 @@ immutable SHA in every downstream checkout. It:
 
 1. Validates extension IDs, the release tag, and the tag-to-source relationship
 2. Builds `chrome.zip`, `firefox.zip`, `firefox-sources.zip`
-3. Builds raw helpers for macOS amd64/arm64, Linux amd64/arm64, and Windows amd64
+3. Builds raw helpers for macOS, Linux, and Windows, each for amd64 and arm64
 4. **Verifies Firefox source ZIP**: extracts sources, rebuilds from scratch, `diff -qr` against original to ensure reproducibility
 5. Signs/notarizes the macOS binaries, app, and package and verifies every layer
-6. Builds and inspects Linux `.deb`/`.rpm` packages and includes the version-pinned repair script
-7. Requires exactly one configured Windows signing integration to sign and verify the raw EXE before MSI construction, then signs and verifies the outer MSI and its embedded EXE
-8. Runs Defender on the exact Windows candidate with cloud-delivered protection enabled
+6. Builds and inspects Linux `.deb`/`.rpm` packages and includes the Unix and PowerShell bootstraps
+7. In signed mode, verifies both raw Windows EXEs, the outer x64 MSI, and its embedded amd64 EXE against the configured signing policy; explicit unsigned mode records its exception
+8. Requires native ARM64 runtime evidence and, in signed mode, Defender evidence for both raw Windows EXEs and the MSI
 9. Assembles the complete allowlisted matrix, generates `SHA256SUMS.txt` only after final signing/packaging, creates build-provenance attestations, and stores the immutable candidate for 90 days
 
 The candidate workflow has no release-write permission and never publishes
@@ -1086,13 +1092,14 @@ notarization, and packaging. When GitHub CLI is available,
 artifact's build provenance. On macOS, use `pkgutil --check-signature` for the
 package and `codesign --verify --deep --strict` plus `spctl` for the embedded
 app. On Windows, use `Get-AuthenticodeSignature` or SignTool; the release gate
-additionally verifies the raw EXE, the byte-identical MSI-embedded EXE, and the
-outer MSI against one exact publisher subject and timestamp policy.
+additionally verifies both raw EXEs, the byte-identical amd64 MSI-embedded EXE,
+and the outer MSI against one exact publisher subject and timestamp policy.
 
-Windows publication remains disabled until one signing provider and its exact
-publisher subject have been recorded. Missing credentials, policy values,
-signatures, timestamps, nested identity, or security evidence fail the
-candidate rather than producing an unsigned release. See
+Signed Windows publication requires a configured signing provider and its exact
+publisher subject. Missing credentials, policy values, signatures, timestamps,
+nested identity, or security evidence fail the signed candidate. The documented
+unsigned mode must be selected explicitly; it never follows automatically from
+a signing failure. See
 [WINDOWS_CODE_SIGNING_POLICY.md](WINDOWS_CODE_SIGNING_POLICY.md) and
 [SECURITY.md](SECURITY.md) for verification and false-positive reporting.
 
@@ -1101,11 +1108,21 @@ candidate rather than producing an unsigned release. See
 - Only browser traffic is proxied -- system networking is never modified
 - The proxy binds to `127.0.0.1` only (not exposed to the network)
 - When the extension is disabled or the service worker suspends, proxy settings are cleared to `DIRECT`
-- The loopback proxy is unauthenticated; on a multi-user machine, another local process/user that discovers its random port could use that browser profile's tailnet access
+- HTTP and SOCKS5 proxy connections require credentials generated for the helper process and delivered to the extension through native messaging
 
-### Web Client CSRF
+### Web Client Authorization
 
-Requests to the Tailscale web client (`100.100.100.100`) include a `Sec-Tailscale: browser-ext` header for CSRF protection.
+The Tailscale web client (`100.100.100.100`) checks its management session and
+the viewer's capabilities independently of proxy authentication. Mutating web
+requests retain Tailscale's same-origin checks using `Sec-Fetch-Site` or
+`Origin`. The `Sec-Tailscale: browser-ext` header does not replace those checks.
+
+Web logout and native account changes stop new web requests and drain active
+handlers before changing identity. An authorized web logout clears the old
+profile's cached state and web authorization at the LocalAPI boundary, before
+logout executes. The host serializes this operation with native commands and
+shutdown; a browser disconnect does not release the gate while a submitted
+mutation is still running.
 
 ### Native Messaging
 
@@ -1178,7 +1195,7 @@ Full policy: [docs/privacy-policy.md](privacy-policy.md)
 - **Listing status:** Published on [Firefox Add-ons (AMO)](https://addons.mozilla.org/firefox/addon/tailchrome/).
 - **Categories:** Privacy & Security, Other
 - **Addon ID:** `tailchrome@tesseras.org`
-- **Minimum Firefox version:** 140.0
+- **Minimum Firefox version:** 142.0
 - **Source code disclosure:** `firefox-sources.zip` included with each release for AMO reviewer verification
 
 Full listing text: [STORE_LISTING.md](STORE_LISTING.md)

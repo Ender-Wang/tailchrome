@@ -5,7 +5,7 @@
 - Add-on name: `Tailchrome`
 - Firefox add-on ID: `tailchrome@tesseras.org`
 - Target platform: desktop Firefox only
-- Minimum Firefox version: `140.0`
+- Minimum Firefox version: `142.0`
 - Companion native helper: downloaded separately from GitHub Releases
 
 ## What The Extension Does

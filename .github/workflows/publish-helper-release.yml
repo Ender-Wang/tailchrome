@@ -168,12 +168,14 @@ jobs:
           tailchrome-helper-macos-user.zip
           tailchrome-helper-macos.pkg
           tailchrome-helper-windows-x64.msi
+          tailchrome-install.ps1
           tailchrome-install.sh
           tailscale-browser-ext-darwin-amd64
           tailscale-browser-ext-darwin-arm64
           tailscale-browser-ext-linux-amd64
           tailscale-browser-ext-linux-arm64
           tailscale-browser-ext-windows-amd64.exe
+          tailscale-browser-ext-windows-arm64.exe
           ASSETS
           sed -i 's/^          //' "$RUNNER_TEMP/expected-release-assets.txt"
           find candidate/release -mindepth 1 -maxdepth 1 -type f -printf '%f\n' |
@@ -192,10 +194,12 @@ jobs:
 
           if [[ "$windows_signing" == "unsigned" ]]; then
             printf '%s\n' \
+              windows-arm64-smoke.json \
               windows-signature-verification.json \
               > "$RUNNER_TEMP/expected-evidence.txt"
           else
             printf '%s\n' \
+              windows-arm64-smoke.json \
               windows-defender-verification.json \
               windows-signature-verification.json \
               > "$RUNNER_TEMP/expected-evidence.txt"
@@ -206,17 +210,39 @@ jobs:
 
           signature_summary="candidate/evidence/windows-signature-verification.json"
           raw_hash="$(sha256sum candidate/release/tailscale-browser-ext-windows-amd64.exe | cut -d' ' -f1)"
+          arm64_hash="$(sha256sum candidate/release/tailscale-browser-ext-windows-arm64.exe | cut -d' ' -f1)"
           msi_hash="$(sha256sum candidate/release/tailchrome-helper-windows-x64.msi | cut -d' ' -f1)"
+          smoke_summary="candidate/evidence/windows-arm64-smoke.json"
+          smoke_evidence_hash="$(sha256sum "$smoke_summary" | cut -d' ' -f1)"
+          test "$(jq -r .schemaVersion "$smoke_summary")" = "1"
+          test "$(jq -r .result "$smoke_summary")" = "clean"
+          test "$(jq -r .runnerLabel "$smoke_summary")" = "windows-11-arm"
+          test "$(jq -r .runnerOS "$smoke_summary")" = "Windows"
+          test "$(jq -r .runnerArchitecture "$smoke_summary")" = "ARM64"
+          test "$(jq -r .processorArchitecture "$smoke_summary")" = "ARM64"
+          test "$(jq -r .sourceSha "$smoke_summary")" = "$source_sha"
+          test "$(jq -r .releaseTag "$smoke_summary")" = "$RELEASE_TAG"
+          test "$(jq -r .helperVersion "$smoke_summary")" = "$RELEASE_TAG"
+          test "$(jq -r .installerTests "$smoke_summary")" = "passed"
+          test "$(jq -r .nativeMessagingHandshake "$smoke_summary")" = "passed"
+          test "$(jq -r '.installerShells | join(",")' "$smoke_summary")" = "powershell.exe-5.1-native-arm64,powershell.exe-5.1-emulated-shell"
+          test "$(jq -r .rawExe.name "$smoke_summary")" = "tailscale-browser-ext-windows-arm64.exe"
+          test "$(jq -r .rawExe.sha256 "$smoke_summary")" = "$arm64_hash"
+          test "$(jq -r .windowsArm64SmokeEvidenceSha256 "$metadata")" = "$smoke_evidence_hash"
+
           if [[ "$windows_signing" == "unsigned" ]]; then
             test "$(jq -r .mode "$signature_summary")" = "unsigned"
             test "$(jq -r .rawExe.sha256 "$signature_summary")" = "$raw_hash"
+            test "$(jq -r .arm64Exe.sha256 "$signature_summary")" = "$arm64_hash"
             test "$(jq -r .msi.sha256 "$signature_summary")" = "$msi_hash"
             test "$(jq -r .windowsRawSha256 "$metadata")" = "$raw_hash"
+            test "$(jq -r .windowsArm64Sha256 "$metadata")" = "$arm64_hash"
             test "$(jq -r .windowsMsiSha256 "$metadata")" = "$msi_hash"
             exit 0
           fi
           test "$(jq -r .embeddedMatchesRaw "$signature_summary")" = "true"
           test "$(jq -r .rawExe.sha256 "$signature_summary")" = "$raw_hash"
+          test "$(jq -r .arm64Exe.sha256 "$signature_summary")" = "$arm64_hash"
           test "$(jq -r .embeddedExe.sha256 "$signature_summary")" = "$raw_hash"
           test "$(jq -r .msi.sha256 "$signature_summary")" = "$msi_hash"
           jq -e '.expectedSignerSubject | strings | length > 0' "$signature_summary" >/dev/null
@@ -300,9 +326,10 @@ jobs:
           jq -e '.scanCompletedAt | strings | length > 0' "$defender_summary" >/dev/null
           jq -e '
             .files |
-            length == 2 and all(
+            length == 3 and all(
               (
                 .name == "tailscale-browser-ext-windows-amd64.exe" or
+                .name == "tailscale-browser-ext-windows-arm64.exe" or
                 .name == "tailchrome-helper-windows-x64.msi"
               ) and
               .scanResult == "clean" and
@@ -321,7 +348,12 @@ jobs:
             jq -r --arg name tailscale-browser-ext-windows-amd64.exe \
               '.files[] | select(.name == $name) | .sha256' "$defender_summary"
           )" = "$raw_hash"
+          test "$(
+            jq -r --arg name tailscale-browser-ext-windows-arm64.exe \
+              '.files[] | select(.name == $name) | .sha256' "$defender_summary"
+          )" = "$arm64_hash"
           test "$(jq -r .windowsRawSha256 "$metadata")" = "$raw_hash"
+          test "$(jq -r .windowsArm64Sha256 "$metadata")" = "$arm64_hash"
           test "$(
             jq -r --arg name tailchrome-helper-windows-x64.msi \
               '.files[] | select(.name == $name) | .sha256' "$defender_summary"
@@ -387,6 +419,7 @@ jobs:
           }
           .\scripts\verify-windows-signatures.ps1 `
             -RawExe .\candidate\release\tailscale-browser-ext-windows-amd64.exe `
+            -RawArm64Exe .\candidate\release\tailscale-browser-ext-windows-arm64.exe `
             -Msi .\candidate\release\tailchrome-helper-windows-x64.msi `
             -ExpectedSignerSubject "$env:WINDOWS_EXPECTED_SIGNER_SUBJECT" `
             -SignToolPath "$env:WINDOWS_SIGNTOOL_PATH"

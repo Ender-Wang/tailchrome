@@ -12,8 +12,8 @@ cask "tailchrome" do
   pkg "tailchrome-helper-macos.pkg"
 
   uninstall script:  {
-              executable:   "/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext",
-              args:         ["-uninstall"],
+              executable:   "/bin/sh",
+              args:         ["-c", "helper=\"$1\"; if \"$helper\" --help 2>&1 | grep -Fq -- '--binary-path'; then \"$helper\" uninstall --binary-path \"$helper\"; else \"$helper\" -uninstall; fi", "tailchrome-uninstall", "/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext"],
               sudo:         false,
               must_succeed: false,
             },
@@ -27,9 +27,9 @@ cask "tailchrome" do
       /Applications/Tailchrome Helper.app
 
     Before uninstalling, disconnect Tailchrome and close your browsers.
-    Uninstall removes registrations for the current user. Other users should run
-    the following command in their account before the package is removed:
-      "/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext" -uninstall
+    Uninstall removes registrations owned by the package binary for the current user. Other users should run
+    the following capability-compatible command in their account before the package is removed:
+      helper="/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext"; if "$helper" --help 2>&1 | grep -Fq -- '--binary-path'; then "$helper" uninstall --binary-path "$helper"; else "$helper" -uninstall; fi
     Tailscale identities and profile data are preserved.
   EOS
 end

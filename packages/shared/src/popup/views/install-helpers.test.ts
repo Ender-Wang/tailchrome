@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   binaryFilename,
   buildDownloadURL,
@@ -9,6 +9,7 @@ import {
   requestNativeHostRetries,
 } from "./install-helpers";
 import { sendMessage } from "../popup";
+import { copyToClipboard } from "../utils";
 import { baseState } from "../../__test__/fixtures";
 
 vi.mock("../popup", () => ({
@@ -19,6 +20,13 @@ vi.mock("../utils", () => ({
   copyToClipboard: vi.fn(),
   showToast: vi.fn(),
 }));
+
+const release = "https://github.com/dantraynor/tailchrome/releases";
+const version = "v0.1.13";
+
+function setPlatform(os: string, arch: string): void {
+  chrome.runtime.getPlatformInfo = vi.fn().mockResolvedValue({ os, arch }) as typeof chrome.runtime.getPlatformInfo;
+}
 
 describe("normalizeInstallerPlatform", () => {
   it.each([
@@ -32,125 +40,65 @@ describe("normalizeInstallerPlatform", () => {
     expect(normalizeInstallerPlatform(input)).toEqual(expected);
   });
 
-  it("does not guess unsupported operating systems or architectures", () => {
-    expect(
-      normalizeInstallerPlatform({ os: "cros", arch: "x86-64" }),
-    ).toEqual({ platform: "unknown", architecture: "amd64" });
-    expect(
-      normalizeInstallerPlatform({ os: "linux", arch: "riscv64" }),
-    ).toEqual({ platform: "linux", architecture: "unknown" });
+  it("marks unsupported values without guessing", () => {
+    expect(normalizeInstallerPlatform({ os: "cros", arch: "x86-64" })).toEqual({
+      platform: "unknown",
+      architecture: "amd64",
+    });
+    expect(normalizeInstallerPlatform({ os: "linux", arch: "riscv64" })).toEqual({
+      platform: "linux",
+      architecture: "unknown",
+    });
   });
 });
 
-describe("installerDownloads", () => {
-  it("returns the macOS package asset", () => {
-    expect(installerDownloads("macos", "arm64")).toEqual([
-      {
-        filename: "tailchrome-helper-macos.pkg",
-        label: "Download macOS installer (.pkg)",
-        url: "https://github.com/dantraynor/tailchrome/releases/download/v0.1.13/tailchrome-helper-macos.pkg",
-      },
-    ]);
+describe("installer assets", () => {
+  it("uses the pinned per-user asset for each supported primary flow", () => {
+    expect(installerDownloads("linux", "amd64")[0]).toMatchObject({
+      filename: "tailchrome-install.sh",
+      url: `${release}/download/${version}/tailchrome-install.sh`,
+    });
+    expect(installerDownloads("macos", "arm64")[0]).toMatchObject({
+      filename: "tailchrome-helper-macos-user.zip",
+    });
+    expect(installerDownloads("windows", "amd64")[0]).toMatchObject({
+      filename: "tailchrome-helper-windows-x64.msi",
+    });
+    expect(installerDownloads("windows", "arm64")[0]).toMatchObject({
+      filename: "tailchrome-install.ps1",
+    });
   });
 
-  it("does not offer macOS artifacts for an unsupported architecture", () => {
-    expect(installerDownloads("macos", "unknown")).toEqual([
-      {
-        filename: null,
-        label: "Open latest release",
-        url: "https://github.com/dantraynor/tailchrome/releases/tag/v0.1.13",
-      },
-    ]);
-    expect(binaryFilename("macos", "unknown")).toBeNull();
-  });
-
-  it.each(["amd64", "arm64"] as const)(
-    "returns the Windows x64 MSI asset on %s",
-    (architecture) => {
-      expect(installerDownloads("windows", architecture)).toEqual([
-        {
-          filename: "tailchrome-helper-windows-x64.msi",
-          label: "Download Windows installer (.msi)",
-          url: "https://github.com/dantraynor/tailchrome/releases/download/v0.1.13/tailchrome-helper-windows-x64.msi",
-        },
-      ]);
-    },
-  );
-
-  it("does not offer x64 Windows artifacts for an unsupported architecture", () => {
-    expect(installerDownloads("windows", "unknown")).toEqual([
-      {
-        filename: null,
-        label: "Open latest release",
-        url: "https://github.com/dantraynor/tailchrome/releases/tag/v0.1.13",
-      },
-    ]);
-    expect(binaryFilename("windows", "unknown")).toBeNull();
-    expect(buildDownloadURL("windows", "unknown")).toBe(
-      "https://github.com/dantraynor/tailchrome/releases/tag/v0.1.13",
+  it("reports the native Windows ARM64 raw asset", () => {
+    expect(binaryFilename("windows", "amd64")).toBe(
+      "tailscale-browser-ext-windows-amd64.exe",
     );
-  });
-
-  it("returns both Linux packages only for amd64", () => {
-    expect(installerDownloads("linux", "amd64")).toEqual([
-      {
-        filename: "tailchrome-helper-linux-amd64.deb",
-        label: "Download .deb (Debian/Ubuntu)",
-        url: "https://github.com/dantraynor/tailchrome/releases/download/v0.1.13/tailchrome-helper-linux-amd64.deb",
-      },
-      {
-        filename: "tailchrome-helper-linux-x86_64.rpm",
-        label: "Download .rpm (Fedora/RHEL)",
-        url: "https://github.com/dantraynor/tailchrome/releases/download/v0.1.13/tailchrome-helper-linux-x86_64.rpm",
-      },
-    ]);
-  });
-
-  it("uses the verified fallback installer instead of amd64 packages on Linux ARM64", () => {
-    expect(installerDownloads("linux", "arm64")).toEqual([
-      {
-        filename: "tailchrome-install.sh",
-        label: "Download verified Linux ARM64 installer",
-        url: "https://github.com/dantraynor/tailchrome/releases/download/v0.1.13/tailchrome-install.sh",
-      },
-    ]);
-  });
-
-  it("falls back to the release page for unknown platforms", () => {
-    expect(installerDownloads("unknown", "unknown")).toEqual([
-      {
-        filename: null,
-        label: "Open latest release",
-        url: "https://github.com/dantraynor/tailchrome/releases/tag/v0.1.13",
-      },
-    ]);
-  });
-
-  it("keeps raw binary downloads available as a fallback", () => {
+    expect(binaryFilename("windows", "arm64")).toBe(
+      "tailscale-browser-ext-windows-arm64.exe",
+    );
     expect(buildDownloadURL("windows", "arm64")).toBe(
-      "https://github.com/dantraynor/tailchrome/releases/download/v0.1.13/tailscale-browser-ext-windows-amd64.exe",
+      `${release}/download/${version}/tailscale-browser-ext-windows-arm64.exe`,
     );
-    expect(buildDownloadURL("linux", "arm64")).toBe(
-      "https://github.com/dantraynor/tailchrome/releases/download/v0.1.13/tailscale-browser-ext-linux-arm64",
-    );
-    expect(binaryFilename("macos", "amd64")).toBe(
-      "tailscale-browser-ext-darwin-amd64",
-    );
-    expect(binaryFilename("macos", "arm64")).toBe(
-      "tailscale-browser-ext-darwin-arm64",
-    );
+  });
+
+  it("uses release information instead of an unsupported asset", () => {
+    expect(installerDownloads("linux", "unknown")).toEqual([
+      {
+        filename: null,
+        label: "Open release information",
+        url: `${release}/tag/${version}`,
+      },
+    ]);
+    expect(installerDownloads("unknown", "unknown")[0]?.filename).toBeNull();
+    expect(buildDownloadURL("windows", "unknown")).toBe(`${release}/tag/${version}`);
   });
 });
 
 describe("requestNativeHostRetries", () => {
-  beforeEach(() => {
-    vi.mocked(sendMessage).mockClear();
-  });
+  beforeEach(() => vi.mocked(sendMessage).mockClear());
 
-  it("immediately asks the background worker to poll native-host discovery", () => {
+  it("immediately asks the background worker to poll discovery", () => {
     requestNativeHostRetries("package");
-
-    expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledWith({
       type: "retry-native-host",
       source: "package",
@@ -162,450 +110,214 @@ describe("renderInstallFlow", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.mocked(sendMessage).mockClear();
-    chrome.runtime.getPlatformInfo = vi.fn().mockResolvedValue({
-      os: "win",
-      arch: "x86-64",
-    }) as typeof chrome.runtime.getPlatformInfo;
+    vi.mocked(copyToClipboard).mockClear();
+    chrome.runtime.getManifest = vi.fn().mockReturnValue({ version: "0.1.13" }) as typeof chrome.runtime.getManifest;
     chrome.tabs.create = vi.fn().mockResolvedValue(undefined) as unknown as typeof chrome.tabs.create;
     document.body.textContent = "";
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
-  it(
-    "requests package-sourced native-host retries from the installer button",
-    async () => {
-      const root = document.createElement("div");
-      document.body.appendChild(root);
-
-      await renderInstallFlow(root, {
-        mode: "install",
-        state: baseState({
-          hostConnected: false,
-          helperFailure: {
-            kind: "helper-unavailable",
-            diagnosticCode: "native-host-unavailable",
-            diagnosticMessage: null,
-          },
-        }),
-      });
-
-      root.querySelector<HTMLAnchorElement>(".install-pkg-cta a")?.click();
-
-      // The retry request must go out synchronously in the click handler:
-      // opening the download tab closes the popup surface right after.
-      expect(sendMessage).toHaveBeenCalledWith({
-        type: "retry-native-host",
-        source: "package",
-      });
-      expect(chrome.tabs.create).toHaveBeenCalledWith({
-        url: "https://github.com/dantraynor/tailchrome/releases/download/v0.1.13/tailchrome-helper-windows-x64.msi",
-      });
-    },
-  );
-
-  it("re-enables the discovery retry button after a quiet retry", async () => {
+  it("shows one copyable, pinned Bash command on Linux", async () => {
+    setPlatform("linux", "x86-64");
     const root = document.createElement("div");
-    document.body.appendChild(root);
+    await renderInstallFlow(root, { mode: "install", state: baseState({ hostConnected: false }) });
 
-    await renderInstallFlow(root, {
-      mode: "install",
-      state: baseState({ hostConnected: false }),
-    });
-
-    const retry = root.querySelector<HTMLButtonElement>(
-      ".helper-discovery-retry",
-    )!;
-    retry.click();
-
-    expect(sendMessage).toHaveBeenCalledWith({
-      type: "retry-native-host",
-      source: "manual",
-    });
-    expect(retry.disabled).toBe(true);
-    expect(retry.textContent).toBe("Retrying…");
-
-    // A retry that keeps failing never re-renders the view (equivalent
-    // failures are deduped), so the button must recover on its own.
-    vi.advanceTimersByTime(3000);
-    expect(retry.disabled).toBe(false);
-    expect(retry.textContent).toBe("Retry discovery");
-  });
-
-  it("renders both Linux package links with install commands on amd64", async () => {
-    chrome.runtime.getPlatformInfo = vi.fn().mockResolvedValue({
-      os: "linux",
-      arch: "x86-64",
-    }) as typeof chrome.runtime.getPlatformInfo;
-    const root = document.createElement("div");
-    document.body.appendChild(root);
-
-    await renderInstallFlow(root, {
-      mode: "install",
-      state: baseState({ hostConnected: false }),
-    });
-
-    const links = [...root.querySelectorAll<HTMLAnchorElement>(".install-pkg-cta a")];
-    expect(links.map((link) => link.href)).toEqual([
-      "https://github.com/dantraynor/tailchrome/releases/download/v0.1.13/tailchrome-helper-linux-amd64.deb",
-      "https://github.com/dantraynor/tailchrome/releases/download/v0.1.13/tailchrome-helper-linux-x86_64.rpm",
-    ]);
-    expect(root.textContent).toContain("sudo apt install");
-    expect(root.textContent).toContain("sudo dnf install");
-  });
-
-  it("offers a visible per-user Linux amd64 installer before system packages", async () => {
-    chrome.runtime.getPlatformInfo = vi.fn().mockResolvedValue({
-      os: "linux", arch: "x86-64",
-    }) as typeof chrome.runtime.getPlatformInfo;
-    const root = document.createElement("div");
-    await renderInstallFlow(root, {
-      mode: "install", state: baseState({ hostConnected: false }),
-    });
-
-    const section = root.querySelector<HTMLElement>(".install-advanced-section")!;
-    expect(section.classList.contains("hidden")).toBe(false);
-    expect(section.textContent).toContain("Install for this user — no administrator access required");
-    expect(section.textContent).toContain("sha256sum --check");
-    expect(section.textContent).toContain("tailscale-browser-ext-linux-amd64");
-    expect(root.querySelector(".install-advanced-toggle")).toBeNull();
-    expect(root.textContent!.indexOf("Install for this user")).toBeLessThan(
-      root.textContent!.indexOf("Or install for all users"),
+    const primary = root.querySelector<HTMLElement>(".helper-install-primary")!;
+    const command = primary.querySelector("code")!.textContent!;
+    expect(command).toBe(
+      `curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 '${release}/download/${version}/tailchrome-install.sh' | bash -s -- --version '${version}'`,
     );
-    section.querySelector<HTMLAnchorElement>("a")!.click();
+    expect(primary.querySelector<HTMLButtonElement>("button")?.textContent).toBe("Copy command");
+    expect(root.querySelector(".helper-install-alternatives")?.hasAttribute("open")).toBe(false);
+
+    primary.querySelector<HTMLButtonElement>("button")!.click();
+    expect(copyToClipboard).toHaveBeenCalledWith(command);
     expect(sendMessage).toHaveBeenCalledWith({ type: "retry-native-host", source: "fallback" });
   });
 
-  it.each(["x86-64", "arm64"])("offers the per-user macOS app on %s before the system package", async (arch) => {
-    chrome.runtime.getPlatformInfo = vi.fn().mockResolvedValue({
-      os: "mac", arch,
-    }) as typeof chrome.runtime.getPlatformInfo;
+  it("keeps Linux package alternatives collapsed and starts discovery on package launch", async () => {
+    setPlatform("linux", "x86-64");
     const root = document.createElement("div");
-    await renderInstallFlow(root, {
-      mode: "install", state: baseState({ hostConnected: false }),
-    });
+    await renderInstallFlow(root, { mode: "install", state: baseState({ hostConnected: false }) });
 
-    const link = root.querySelector<HTMLAnchorElement>(".install-per-user a")!;
-    expect(link.href).toBe("https://github.com/dantraynor/tailchrome/releases/download/v0.1.13/tailchrome-helper-macos-user.zip");
-    expect(link.closest(".hidden")).toBeNull();
-    expect(root.textContent).toContain("Install for this user — no administrator access required");
-    expect(root.textContent).toContain("Open the downloaded ZIP");
-    expect(root.textContent).toContain("browser policy may still block");
-    expect(root.querySelector('a[href$="/tailchrome-helper-macos.pkg"]')).not.toBeNull();
-    expect(root.textContent!.indexOf("Install for this user")).toBeLessThan(
-      root.textContent!.indexOf("Or install for all users"),
-    );
-    link.click();
+    const alternatives = root.querySelector<HTMLDetailsElement>("details")!;
+    expect(alternatives.open).toBe(false);
+    alternatives.open = true;
+    const deb = [...alternatives.querySelectorAll<HTMLAnchorElement>("a")].find((link) => link.textContent?.includes("Debian"))!;
+    deb.click();
     expect(sendMessage).toHaveBeenCalledWith({ type: "retry-native-host", source: "package" });
-    expect(chrome.tabs.create).toHaveBeenCalledWith({ url: link.href });
+    expect(chrome.tabs.create).toHaveBeenCalledWith({ url: `${release}/download/${version}/tailchrome-helper-linux-amd64.deb` });
   });
 
-  it.each(["arm64", "aarch64"])(
-    "uses the verified Linux ARM64 path for runtime arch %s",
-    async (arch) => {
-      chrome.runtime.getPlatformInfo = vi.fn().mockResolvedValue({
-        os: "linux",
-        arch,
-      }) as typeof chrome.runtime.getPlatformInfo;
-      const root = document.createElement("div");
-      document.body.appendChild(root);
-
-      await renderInstallFlow(root, {
-        mode: "install",
-        state: baseState({ hostConnected: false }),
-      });
-
-      const links = [
-        ...root.querySelectorAll<HTMLAnchorElement>(".install-pkg-cta a"),
-      ];
-      expect(links.map((link) => link.href)).toEqual([
-        "https://github.com/dantraynor/tailchrome/releases/download/v0.1.13/tailchrome-install.sh",
-      ]);
-      expect(root.textContent).toContain("Linux ARM64");
-      expect(root.textContent).toContain("Install for this user — no administrator access required");
-      expect(root.textContent).toContain("tailscale-browser-ext-linux-arm64");
-      expect(root.textContent).not.toContain("sudo apt install");
-      expect(root.textContent).not.toContain("sudo dnf install");
-      expect(root.innerHTML).not.toContain("tailchrome-helper-linux-amd64");
-      const runStep = root.querySelectorAll<HTMLElement>(".install-step")[1]!;
-      expect(runStep.textContent).toContain("sha256sum --check");
-      expect(runStep.textContent).toContain("gh attestation verify");
-      expect(runStep.textContent).toContain(
-        "less ~/Downloads/tailchrome-install.sh",
-      );
-      expect(
-        runStep.querySelector<HTMLAnchorElement>(
-          'a[href$="/SHA256SUMS.txt"]',
-        ),
-      ).not.toBeNull();
-      expect(root.querySelector(".install-advanced-toggle")).toBeNull();
-    },
-  );
-
-  it("links to the release page when runtime platform lookup fails", async () => {
-    chrome.runtime.getPlatformInfo = vi.fn().mockRejectedValue(
-      new Error("platform unavailable"),
-    ) as typeof chrome.runtime.getPlatformInfo;
+  it("makes the signed macOS per-user ZIP primary and keeps a shell option available", async () => {
+    setPlatform("mac", "arm64");
     const root = document.createElement("div");
-    document.body.appendChild(root);
+    await renderInstallFlow(root, { mode: "install", state: baseState({ hostConnected: false }) });
 
-    await renderInstallFlow(root, {
-      mode: "install",
-      state: baseState({ hostConnected: false }),
-    });
-
-    const links = [...root.querySelectorAll<HTMLAnchorElement>(".install-pkg-cta a")];
-    expect(links.map((link) => link.href)).toEqual([
-      "https://github.com/dantraynor/tailchrome/releases/tag/v0.1.13",
-    ]);
+    const primary = root.querySelector<HTMLElement>(".helper-install-primary")!;
+    expect(primary.textContent).toContain("signed app");
+    const zip = primary.querySelector<HTMLAnchorElement>("a")!;
+    expect(zip.href).toBe(`${release}/download/${version}/tailchrome-helper-macos-user.zip`);
+    expect(root.textContent).toContain("Terminal option");
+    expect(root.textContent).toContain("tailchrome-install.sh");
+    expect(root.querySelector<HTMLDetailsElement>("details")!.open).toBe(false);
+    zip.click();
+    expect(sendMessage).toHaveBeenCalledWith({ type: "retry-native-host", source: "package" });
   });
 
-  it("reveals the verified per-user repair and requests fallback retries", async () => {
+  it("makes the per-user MSI primary on Windows x64", async () => {
+    setPlatform("win", "x86-64");
     const root = document.createElement("div");
-    document.body.appendChild(root);
+    await renderInstallFlow(root, { mode: "install", state: baseState({ hostConnected: false }) });
 
-    await renderInstallFlow(root, {
-      mode: "install",
-      state: baseState({ hostConnected: false }),
-    });
-
-    const toggle = root.querySelector<HTMLButtonElement>(
-      ".install-advanced-toggle",
-    )!;
-    const section = root.querySelector<HTMLElement>(
-      ".install-advanced-section",
-    )!;
-    expect(section.classList.contains("hidden")).toBe(true);
-
-    toggle.click();
-    expect(section.classList.contains("hidden")).toBe(false);
-    expect(toggle.textContent).toBe("Hide verified per-user repair");
-    expect(section.textContent).toContain(
-      "powershell.exe -NoProfile -Command \"msiexec.exe /fa (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads\\tailchrome-helper-windows-x64.msi')\"",
+    const primary = root.querySelector<HTMLElement>(".helper-install-primary")!;
+    expect(primary.textContent).toContain("without administrator access");
+    expect(primary.querySelector<HTMLAnchorElement>("a")?.href).toBe(
+      `${release}/download/${version}/tailchrome-helper-windows-x64.msi`,
     );
-
-    section.querySelector<HTMLAnchorElement>("a")!.click();
-    expect(sendMessage).toHaveBeenCalledWith({
-      type: "retry-native-host",
-      source: "fallback",
-    });
-    expect(chrome.tabs.create).toHaveBeenCalledWith({
-      url: "https://github.com/dantraynor/tailchrome/releases/download/v0.1.13/tailchrome-helper-windows-x64.msi",
-    });
   });
 
-  it("promotes current-user registration repair after discovery retries are exhausted", async () => {
-    chrome.runtime.getPlatformInfo = vi.fn().mockResolvedValue({
-      os: "linux",
-      arch: "x86-64",
-    }) as typeof chrome.runtime.getPlatformInfo;
+  it("makes the native PowerShell command primary on Windows ARM64", async () => {
+    setPlatform("win", "arm64");
     const root = document.createElement("div");
-    document.body.appendChild(root);
+    await renderInstallFlow(root, { mode: "install", state: baseState({ hostConnected: false }) });
 
+    const primary = root.querySelector<HTMLElement>(".helper-install-primary")!;
+    const command = primary.querySelector("code")!.textContent!;
+    expect(command).toContain(`${release}/download/${version}/tailchrome-install.ps1`);
+    expect(command).toContain(`-Version '${version}'`);
+    expect(primary.textContent).toContain("native ARM64");
+    const alternatives = root.querySelector<HTMLDetailsElement>("details")!;
+    expect(alternatives.open).toBe(false);
+    expect(alternatives.textContent).toContain("x64 package (runs under emulation)");
+    expect(alternatives.textContent).toContain("x64 MSI (emulation alternative)");
+    primary.querySelector<HTMLButtonElement>("button")!.click();
+    expect(sendMessage).toHaveBeenCalledWith({ type: "retry-native-host", source: "fallback" });
+  });
+
+  it("executes the generated PowerShell one-liner without outer-shell expansion", async () => {
+    setPlatform("win", "arm64");
+    const root = document.createElement("div");
+    await renderInstallFlow(root, { mode: "install", state: baseState({ hostConnected: false }) });
+    const command = root.querySelector<HTMLElement>(".helper-install-primary code")!.textContent!;
+    expect(command.startsWith("& ([scriptblock]::Create((Invoke-RestMethod -Uri '")).toBe(true);
+    expect(command).not.toContain("$script");
+    const expectedURL = release + "/download/" + version + "/tailchrome-install.ps1";
+    const powershell = [
+      "$ErrorActionPreference = 'Stop'",
+      "function Invoke-RestMethod { param([string]$Uri); if ($Uri -ne '" + expectedURL + "') { throw 'unexpected URL' }; 'param([string]$Version) Write-Output (\"installed:\" + $Version)' }",
+      command,
+    ].join("\n");
+
+    type ChildProcessModule = {
+      execFileSync: (
+        file: string,
+        args: string[],
+        options: { encoding: "utf8" },
+      ) => string;
+    };
+    const processLike = (
+      globalThis as typeof globalThis & {
+        process?: {
+          getBuiltinModule?: (name: string) => unknown;
+        };
+      }
+    ).process;
+    const childProcess = processLike?.getBuiltinModule?.(
+      "node:child_process",
+    ) as ChildProcessModule | undefined;
+    if (!childProcess) {
+      return;
+    }
+    let output: string;
+    try {
+      output = childProcess.execFileSync(
+        "pwsh",
+        ["-NoProfile", "-NonInteractive", "-Command", powershell],
+        { encoding: "utf8" },
+      );
+    } catch (error) {
+      // Native Windows CI has PowerShell. Keep the shared unit suite usable
+      // in minimal local environments where pwsh is not installed.
+      if (String(error).includes("ENOENT")) {
+        return;
+      }
+      throw error;
+    }
+    expect(output.trim()).toBe("installed:" + version);
+  });
+
+  it("preserves failure-specific copy, repair context, diagnostics, and retry", async () => {
+    setPlatform("linux", "x86-64");
+    const root = document.createElement("div");
     await renderInstallFlow(root, {
       mode: "install",
       state: baseState({
         hostConnected: false,
         repairRegistrationAvailable: true,
         helperFailure: {
-          kind: "helper-unavailable",
-          diagnosticCode: "native-host-unavailable",
-          diagnosticMessage: "raw fixture should stay local",
+          kind: "helper-not-allowed",
+          diagnosticCode: "native-host-not-allowed",
+          diagnosticMessage: "raw local detail",
         },
       }),
     });
 
-    expect(root.textContent).toContain(
-      "Repair registration for this browser",
-    );
-    expect(root.textContent).toContain("current-user registration");
-    expect(root.textContent).toContain("Verify, inspect, then run");
-    expect(root.textContent).toContain(
-      'bash ~/Downloads/tailchrome-install.sh --version "v0.1.13"',
-    );
-    expect(
-      root.querySelector<HTMLAnchorElement>(".btn-primary")?.href,
-    ).toBe(
-      "https://github.com/dantraynor/tailchrome/releases/download/v0.1.13/tailchrome-install.sh",
-    );
-    expect(root.textContent!.indexOf("Verify, inspect, then run")).toBeLessThan(
-      root.textContent!.indexOf("Or reinstall the release package"),
-    );
-    expect(root.textContent).not.toContain("raw fixture");
+    expect(root.textContent).toContain("This browser refused access to the registered helper.");
+    expect(root.textContent).toContain("Repair registration for this browser");
     expect(root.textContent).toContain("Copy diagnostic report");
+    expect(root.textContent).not.toContain("raw local detail");
+    root.querySelector<HTMLButtonElement>(".helper-discovery-retry")!.click();
+    expect(sendMessage).toHaveBeenCalledWith({ type: "retry-native-host", source: "manual" });
   });
 
-  it("does not duplicate the Linux ARM64 repair installer after retries are exhausted", async () => {
-    chrome.runtime.getPlatformInfo = vi.fn().mockResolvedValue({
-      os: "linux",
-      arch: "arm64",
-    }) as typeof chrome.runtime.getPlatformInfo;
+  it("never embeds an unsafe manifest version in a command or asset URL", async () => {
+    chrome.runtime.getManifest = vi.fn().mockReturnValue({ version: "0.1.13'; evil" }) as typeof chrome.runtime.getManifest;
+    setPlatform("linux", "x86-64");
     const root = document.createElement("div");
+    await renderInstallFlow(root, { mode: "install", state: baseState({ hostConnected: false }) });
 
-    await renderInstallFlow(root, {
-      mode: "install",
-      state: baseState({
-        hostConnected: false,
-        repairRegistrationAvailable: true,
-      }),
-    });
-
-    expect(root.textContent).toContain("Download repair installer");
-    expect(root.textContent).not.toContain("Or reinstall the release package");
-    expect(
-      root.querySelectorAll<HTMLAnchorElement>(
-        'a[href$="/tailchrome-install.sh"]',
-      ),
-    ).toHaveLength(1);
-    expect(root.textContent).toContain("Retry discovery");
-  });
-
-  it("promotes the installed macOS repair app before package reinstallation", async () => {
-    chrome.runtime.getPlatformInfo = vi.fn().mockResolvedValue({
-      os: "mac",
-      arch: "arm64",
-    }) as typeof chrome.runtime.getPlatformInfo;
-    const root = document.createElement("div");
-
-    await renderInstallFlow(root, {
-      mode: "install",
-      state: baseState({
-        hostConnected: false,
-        repairRegistrationAvailable: true,
-      }),
-    });
-
-    expect(root.textContent).toContain(
-      "/Applications/Tailchrome Helper.app",
-    );
-    expect(root.textContent!.indexOf("Open the installed repair app")).toBeLessThan(
-      root.textContent!.indexOf("Or reinstall the release package"),
-    );
-  });
-
-  it("notes x64 emulation on Windows ARM64", async () => {
-    chrome.runtime.getPlatformInfo = vi.fn().mockResolvedValue({
-      os: "win",
-      arch: "arm64",
-    }) as typeof chrome.runtime.getPlatformInfo;
-    const root = document.createElement("div");
-
-    await renderInstallFlow(root, {
-      mode: "install",
-      state: baseState({ hostConnected: false }),
-    });
-
-    expect(root.textContent).toContain("x64 emulation");
-    expect(root.textContent).toContain("Install for this user — no administrator access required");
-  });
-
-  it("falls back to release information on unsupported Windows architectures", async () => {
-    chrome.runtime.getPlatformInfo = vi.fn().mockResolvedValue({
-      os: "win",
-      arch: "x86-32",
-    }) as typeof chrome.runtime.getPlatformInfo;
-    const root = document.createElement("div");
-
-    await renderInstallFlow(root, {
-      mode: "install",
-      state: baseState({ hostConnected: false }),
-    });
-
-    expect(
-      root.querySelector<HTMLAnchorElement>(".install-pkg-cta a")?.href,
-    ).toBe("https://github.com/dantraynor/tailchrome/releases/tag/v0.1.13");
-    expect(root.innerHTML).not.toContain("tailchrome-helper-windows-x64.msi");
-    expect(root.innerHTML).not.toContain(
-      "tailscale-browser-ext-windows-amd64.exe",
-    );
+    expect(root.querySelector("code")).toBeNull();
     expect(root.textContent).toContain("Open release information");
-    expect(root.textContent).toContain("Review supported releases");
-    expect(root.textContent).toContain("No compatible installer was selected");
-    expect(root.textContent).not.toContain("double-click");
-    expect(root.textContent).not.toContain("retry automatically");
+    expect(root.innerHTML).not.toContain("evil");
+    expect(root.querySelector<HTMLAnchorElement>("a")?.href).toBe(release);
+  });
+
+  it("does not guess an asset for an unknown runtime platform", async () => {
+    setPlatform("cros", "x86-64");
+    const root = document.createElement("div");
+    await renderInstallFlow(root, { mode: "install", state: baseState({ hostConnected: false }) });
+
+    expect(root.querySelector<HTMLAnchorElement>(".helper-install-primary a")?.href).toBe(`${release}/tag/${version}`);
+    expect(root.innerHTML).not.toContain("tailchrome-install.sh");
+    expect(root.innerHTML).not.toContain("tailchrome-helper-windows-x64.msi");
+    expect(root.textContent).toContain("will not guess an asset");
   });
 
   it.each([
     ["linux", "riscv64"],
     ["mac", "x86-32"],
-  ])(
-    "does not offer a repair script on unsupported %s architecture %s",
-    async (os, arch) => {
-      chrome.runtime.getPlatformInfo = vi.fn().mockResolvedValue({
-        os,
-        arch,
-      }) as typeof chrome.runtime.getPlatformInfo;
-      const root = document.createElement("div");
+    ["win", "x86-32"],
+  ])("shows release information for %s with unknown architecture", async (os, arch) => {
+    setPlatform(os, arch);
+    const root = document.createElement("div");
+    await renderInstallFlow(root, { mode: "install", state: baseState({ hostConnected: false }) });
 
-      await renderInstallFlow(root, {
-        mode: "install",
-        state: baseState({
-          hostConnected: false,
-          repairRegistrationAvailable: true,
-        }),
-      });
+    expect(root.querySelector(".helper-install-primary code")).toBeNull();
+    expect(root.querySelector<HTMLAnchorElement>(".helper-install-primary a")?.href).toBe(release + "/tag/" + version);
+    expect(root.querySelector("details")).toBeNull();
+  });
 
-      expect(root.innerHTML).not.toContain("tailchrome-install.sh");
-      expect(root.innerHTML).not.toContain(
-        "tailchrome-helper-linux-amd64.deb",
-      );
-      expect(root.innerHTML).not.toContain(
-        "tailchrome-helper-linux-x86_64.rpm",
-      );
-      expect(root.textContent).toContain("Review supported releases");
-      expect(root.textContent).toContain(
-        "No compatible installer was selected",
-      );
-      expect(root.textContent).not.toContain("complete the installer");
-      expect(root.textContent).not.toContain("retry automatically");
-      expect(root.querySelector(".install-advanced-toggle")).toBeNull();
-      expect(root.querySelector(".install-per-user")).toBeNull();
-      expect(root.textContent).not.toContain("no administrator access required");
-    },
-  );
-
-  it("renders evidence-based not-allowed and incompatible copy", async () => {
-    const notAllowed = document.createElement("div");
-    await renderInstallFlow(notAllowed, {
-      mode: "install",
-      state: baseState({
-        hostConnected: false,
-        helperFailure: {
-          kind: "helper-not-allowed",
-          diagnosticCode: "native-host-not-allowed",
-          diagnosticMessage: null,
-        },
-      }),
-    });
-    expect(notAllowed.textContent).toContain(
-      "This browser refused access to the registered helper.",
-    );
-    expect(notAllowed.textContent).toContain(
-      "Repair registration for this browser",
-    );
-    expect(
-      notAllowed.querySelector<HTMLAnchorElement>(".btn-primary")?.textContent,
-    ).toBe("Download signed installer for repair");
-    expect(notAllowed.textContent).not.toContain(
-      "Or reinstall the release package",
-    );
-
-    const incompatible = document.createElement("div");
-    await renderInstallFlow(incompatible, {
-      mode: "install",
-      state: baseState({
-        hostConnected: false,
-        helperFailure: {
-          kind: "helper-incompatible",
-          diagnosticCode: "future-protocol-incompatible",
-          diagnosticMessage: null,
-        },
-      }),
-    });
-    expect(incompatible.textContent).toContain(
-      "The helper and extension reported an incompatible protocol.",
-    );
+  it("re-enables manual discovery retry after a quiet failure", async () => {
+    setPlatform("win", "x86-64");
+    const root = document.createElement("div");
+    await renderInstallFlow(root, { mode: "install", state: baseState({ hostConnected: false }) });
+    const retry = root.querySelector<HTMLButtonElement>(".helper-discovery-retry")!;
+    retry.click();
+    expect(retry.disabled).toBe(true);
+    vi.advanceTimersByTime(3000);
+    expect(retry.disabled).toBe(false);
+    expect(retry.textContent).toBe("Retry discovery");
   });
 });

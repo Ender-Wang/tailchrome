@@ -344,6 +344,15 @@ func sameProxyPrefs(a, b *ipn.Prefs) bool {
 // defer the returned function to reopen web admission after the mutation.
 func (h *Host) beginProxyProfileChange(lc *local.Client) func() {
 	finishWebChange := h.beginWebSessionChange()
+	return h.beginProxyProfileChangeLocked(lc, finishWebChange)
+}
+
+// beginProxyProfileChangeLocked performs the identity invalidation while the
+// caller owns the web admission transition. Native commands use
+// beginProxyProfileChange; web logout uses this split form from its LocalAPI
+// transport boundary so invalidation happens immediately before the authorized
+// logout mutation, including when that mutation later fails.
+func (h *Host) beginProxyProfileChangeLocked(lc *local.Client, finishWebChange func()) func() {
 	h.sessionMu.Lock()
 	if h.lc != lc {
 		h.sessionMu.Unlock()

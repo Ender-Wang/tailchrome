@@ -49,7 +49,8 @@ providing the published signatures.
 The signed Windows release consists of:
 
 - `tailscale-browser-ext-windows-amd64.exe`;
-- the same signed executable embedded as `tailscale-browser-ext.exe` inside
+- `tailscale-browser-ext-windows-arm64.exe`;
+- the signed amd64 executable embedded as `tailscale-browser-ext.exe` inside
   `tailchrome-helper-windows-x64.msi`; and
 - the signed outer `tailchrome-helper-windows-x64.msi`.
 
@@ -84,13 +85,13 @@ eligible for publication.
 The signing order is fixed:
 
 1. Build the raw Windows helper from the tagged source.
-2. Sign and timestamp the raw EXE.
-3. Verify the EXE's subject, chain, digest, timestamp, and SHA-256.
-4. Build the MSI from that exact signed EXE.
+2. Sign and timestamp both raw EXEs.
+3. Verify each EXE's subject, chain, digest, timestamp, and SHA-256.
+4. Build the x64 MSI from that exact signed amd64 EXE.
 5. Sign and timestamp the outer MSI with the same publisher identity.
 6. Extract the MSI without executing it and prove the embedded EXE is
    byte-identical to the signed raw EXE.
-7. Verify both final files again before candidate assembly and publication.
+7. Verify all three final files again before candidate assembly and publication.
 
 Signing configuration is mandatory. A missing credential, OIDC permission,
 provider approval, expected subject, timestamp, or verification tool fails the
@@ -110,8 +111,8 @@ not expose a workflow input that switches providers or publisher identities.
 
 ## Signature and timestamp requirements
 
-All three Windows signature surfaces—the raw EXE, the MSI-embedded EXE, and the
-outer MSI—must:
+All four Windows signature surfaces—the amd64 raw EXE, ARM64 raw EXE,
+MSI-embedded amd64 EXE, and outer MSI—must:
 
 - report a valid Authenticode status;
 - chain to the one expected signer subject recorded in this policy;
@@ -130,9 +131,11 @@ hashes in that manifest are the hashes reviewed for security clearance.
 ## Security clearance
 
 A clean signature does not establish that runtime behavior is safe. Before
-publication, the exact final EXE and MSI must pass current Defender and
+publication, both exact final EXEs and the MSI must pass current Defender and
 Malwarebytes file and behavioral checks in the controlled Windows validation
-environment. A malware, PUA, or behavioral detection blocks publication until
+environment. The ARM64 helper also requires native ARM64 runtime validation;
+an x64 build or cross-compilation alone does not satisfy it. A malware, PUA,
+or behavioral detection blocks publication until
 the vendor returns a clean determination and the same hash passes again with
 current definitions.
 

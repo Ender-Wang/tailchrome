@@ -56,8 +56,10 @@ not apply.
   - `tailchrome-helper-linux-amd64.deb`
   - `tailchrome-helper-linux-x86_64.rpm`
   - `tailscale-browser-ext-windows-amd64.exe`
+  - `tailscale-browser-ext-windows-arm64.exe`
   - `tailchrome-helper-windows-x64.msi`
   - `tailchrome-install.sh`
+  - `tailchrome-install.ps1`
   - `SHA256SUMS.txt`
 
 - [ ] Artifact attestations exist for the same final files.
@@ -65,10 +67,10 @@ not apply.
 - [ ] The macOS package and extracted per-user app pass signature and stapling validation.
 - [ ] The Linux raw helpers report the intended amd64 and arm64 architectures.
 - [ ] The DEB and RPM contain only their declared system paths and no per-user install hook.
-- [ ] The raw Windows EXE has one valid SHA-256 Authenticode signature, a timestamp, and the exact expected subject.
+- [ ] Each raw Windows EXE (amd64 and ARM64) has a valid SHA-256 Authenticode signature, a timestamp, and the exact expected subject.
 - [ ] The MSI-embedded EXE has the same signature requirements and SHA-256 as the raw EXE.
 - [ ] The outer MSI has one valid SHA-256 Authenticode signature, a timestamp, and the same expected subject.
-- [ ] The fixed Windows SDK SignTool and `Get-AuthenticodeSignature` both accept all three Windows signature layers.
+- [ ] The fixed Windows SDK SignTool and `Get-AuthenticodeSignature` both accept all four Windows signature surfaces.
 
 ## Exact-hash Windows security clearance
 
@@ -77,24 +79,26 @@ The automated Defender artifact must come from the controlled runner; repeat
 both scanner checks and the lifecycle checks in the clean Windows 11 VM before
 publication approval.
 
-| Check | EXE result | MSI result |
-| --- | --- | --- |
-| SHA-256 | `________________` | `________________` |
-| Defender definition version/date | `________________` | `________________` |
-| Defender static scan | `clean / blocked` | `clean / blocked` |
-| Malwarebytes definition version/date | `________________` | `________________` |
-| Malwarebytes static scan | `clean / blocked` | `clean / blocked` |
-| Install/launch/use/repair/uninstall behavior | `clean / blocked` | `clean / blocked` |
-| Behavioral detection | `none / blocked` | `none / blocked` |
-| SmartScreen reputation prompt | `none / unknown reputation / detection` | `none / unknown reputation / detection` |
+| Check | amd64 EXE result | ARM64 EXE result | x64 MSI result |
+| --- | --- | --- | --- |
+| SHA-256 | `________________` | `________________` | `________________` |
+| Defender definition version/date | `________________` | `________________` | `________________` |
+| Defender static scan | `clean / blocked` | `clean / blocked` | `clean / blocked` |
+| Malwarebytes definition version/date | `________________` | `________________` | `________________` |
+| Malwarebytes static scan | `clean / blocked` | `clean / blocked` | `clean / blocked` |
+| Install/launch/use/repair/uninstall behavior | `clean / blocked` | `clean / blocked` | `clean / blocked` |
+| Behavioral detection | `none / blocked` | `none / blocked` | `none / blocked` |
+| SmartScreen reputation prompt | `none / unknown reputation / detection` | `none / unknown reputation / detection` | `none / unknown reputation / detection` |
 
 - [ ] Current Defender definitions and cloud protection were active.
 - [ ] Current Malwarebytes definitions were active.
-- [ ] Both final files were scanned before execution.
+- [ ] All three final files were scanned before execution.
+- [ ] Native ARM64 runtime evidence identifies the same final ARM64 executable hash as the candidate.
+- [ ] The ARM64 helper installs, launches through native messaging, upgrades, and unregisters on native ARM64 Windows, including an emulated-shell install.
 - [ ] The MSI installed for a standard user.
 - [ ] Native-host initialization and one normal connection succeeded.
 - [ ] Repair or reinstall succeeded.
-- [ ] Uninstall removed registrations and runtime copies as documented.
+- [ ] Uninstall removed only registrations and executables owned by that installation; node state was preserved.
 - [ ] No malware, PUA, or behavioral detection occurred.
 - [ ] Any ordinary signed SmartScreen unknown-reputation prompt is recorded for release notes or support, but is not described as malware.
 
@@ -128,3 +132,16 @@ If the candidate artifact expires, or any file or digest differs, create a new c
 See [Homebrew maintenance](../packaging/homebrew/README.md#maintaining-the-tap)
 for workflow retries and manual updates. The helper release remains published
 while this follow-up is completed.
+
+## Helper setup regression checks
+
+- [ ] The matching Bash and PowerShell installer assets were published before the extension's store rollout.
+- [ ] Fresh installation and repeated registration work on each supported OS and architecture.
+- [ ] Latest-default and explicitly pinned scripts select one immutable release and verify its matching binary.
+- [ ] Failed registration, interrupted writes, concurrent installs and locked Windows executables preserve recovery data.
+- [ ] Homebrew opt paths survive upgrade and cleanup without a stale runtime copy.
+- [ ] macOS ZIP launch establishes a stable signed app location and rolls back a failed upgrade.
+- [ ] New package/script uninstallers preserve the replacement owner's registrations. When migrating from v0.1.13 or older, remove the old package first or rerun the new helper's registration after removal.
+- [ ] Custom XDG/browser-data paths and first-use browser registration work.
+- [ ] Chrome Flatpak install, helper launch, login, routing, upgrade and uninstall pass on a Linux machine supporting its namespaces; native registrations and state remain intact.
+- [ ] The popup command/download flow retries discovery even after the popup closes.

@@ -1,5 +1,9 @@
 # Native messaging support for Chromium-family browsers and Chrome channels
 
+> The v0.1.14 CLI adds selective optional-browser registration and explicit
+> overrides. Legacy installer flags retain this design's broad registration
+> behavior. See [current helper installation](../../helper-installation.md).
+
 Closes [#65](https://github.com/dantraynor/tailchrome/issues/65).
 Closes [#66](https://github.com/dantraynor/tailchrome/issues/66).
 

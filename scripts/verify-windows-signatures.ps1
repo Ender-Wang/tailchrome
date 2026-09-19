@@ -2,6 +2,8 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$RawExe,
 
+  [string]$RawArm64Exe = "",
+
   [Parameter(Mandatory = $true)]
   [string]$Msi,
 
@@ -264,6 +266,10 @@ if ([string]::IsNullOrWhiteSpace($ExpectedSignerSubject)) {
 }
 
 $RawExePath = Resolve-RequiredFile -Path $RawExe -Label "Raw EXE"
+$RawArm64ExePath = $null
+if (-not [string]::IsNullOrWhiteSpace($RawArm64Exe)) {
+  $RawArm64ExePath = Resolve-RequiredFile -Path $RawArm64Exe -Label "Raw ARM64 EXE"
+}
 $MsiPath = Resolve-RequiredFile -Path $Msi -Label "MSI"
 $script:ResolvedSignTool = Resolve-RequiredFile -Path $SignToolPath -Label "SignTool"
 
@@ -291,6 +297,10 @@ New-Item -ItemType Directory -Force -Path $ExtractionDirectory | Out-Null
 
 try {
   $RawResult = Get-VerifiedSignature -Path $RawExePath -Label "Raw EXE"
+  $RawArm64Result = $null
+  if ($null -ne $RawArm64ExePath) {
+    $RawArm64Result = Get-VerifiedSignature -Path $RawArm64ExePath -Label "Raw ARM64 EXE"
+  }
   $MsiResult = Get-VerifiedSignature -Path $MsiPath -Label "MSI"
 
   $DecompiledPath = Join-Path $ExtractionDirectory "package.wxs"
@@ -357,6 +367,9 @@ try {
     embeddedExe = $EmbeddedResult
     msi = $MsiResult
     embeddedMatchesRaw = $true
+  }
+  if ($null -ne $RawArm64Result) {
+    $Summary.arm64Exe = $RawArm64Result
   }
   $SummaryJson = $Summary | ConvertTo-Json -Depth 5
 
