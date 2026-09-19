@@ -26,6 +26,10 @@ jobs:
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive --assumeyes flathub com.google.Chrome
           dbus-run-session -- flatpak --user run --command=/usr/bin/true com.google.Chrome
+          # The launch above initializes the app's writable sandbox home. The
+          # smoke script intentionally refuses to touch an app instance it did
+          # not start, so stop the clean instance created by this setup step.
+          flatpak --user kill com.google.Chrome || true
       - name: Verify helper framing inside the sandbox
         run: dbus-run-session -- bash scripts/test-flatpak.sh
       - name: Retain smoke diagnostics
