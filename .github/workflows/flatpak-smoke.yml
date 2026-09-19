@@ -1,6 +1,7 @@
 name: Chrome Flatpak helper smoke
 
 on:
+  pull_request:
   workflow_dispatch:
 
 permissions:
