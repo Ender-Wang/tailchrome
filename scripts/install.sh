@@ -121,7 +121,8 @@ cleanup_status=0
 had_previous=false
 activated=false
 
-# shellcheck disable=SC2329
+# ShellCheck cannot see that rollback is reached indirectly from the EXIT trap.
+# shellcheck disable=SC2317,SC2329
 restore_previous() {
   if [[ "$activated" != true ]]; then
     return 0
