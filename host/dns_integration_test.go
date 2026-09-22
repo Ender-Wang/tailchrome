@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"net/http/httptest"
@@ -27,7 +28,7 @@ import (
 	"tailscale.com/types/nettype"
 )
 
-// Exercise the actual LocalAPI resolver and userspace subnet routing together.
+// Exercise the restricted DNS exchanges and userspace subnet routing together.
 // Neither the restricted name nor its documentation-range IP can resolve or
 // connect through the machine's ordinary DNS and networking.
 func TestSplitDNSThroughSubnetRouter(t *testing.T) {
@@ -68,52 +69,81 @@ func TestSplitDNSThroughSubnetRouter(t *testing.T) {
 	}
 	router, routerStatus := startNode("split-dns-router")
 	var sawA, sawAAAA atomic.Bool
+	answerDNS := func(packet []byte) ([]byte, error) {
+		var message dnsmessage.Message
+		if err := message.Unpack(packet); err != nil {
+			return nil, err
+		}
+		if len(message.Questions) != 1 || message.Questions[0].Name.String() != "service.internal.example.com." {
+			return nil, fmt.Errorf("unexpected DNS questions: %v", message.Questions)
+		}
+		question := message.Questions[0]
+		message.Response = true
+		message.Authoritative = true
+		message.RecursionAvailable = true
+		switch question.Type {
+		case dnsmessage.TypeA:
+			sawA.Store(true)
+			message.Answers = []dnsmessage.Resource{testDNSAddress(question.Name.String(), "192.0.2.80")}
+		case dnsmessage.TypeAAAA:
+			sawAAAA.Store(true)
+		default:
+			return nil, fmt.Errorf("unexpected query type: %v", question.Type)
+		}
+		return message.Pack()
+	}
+	// The production resolver races UDP and TCP. Serve both transports like a
+	// real nameserver instead of making every lookup depend on a cold TCP
+	// handshake finishing inside the per-server deadline under the race detector.
+	for _, network := range []string{"udp", "tcp"} {
+		listener, err := router.Listen(network, "192.0.2.53:53")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { listener.Close() })
+		go func() {
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				go func() {
+					defer conn.Close()
+					conn.SetDeadline(time.Now().Add(5 * time.Second))
+					var packet []byte
+					if network == "tcp" {
+						var length uint16
+						if binary.Read(conn, binary.BigEndian, &length) != nil {
+							// The other transport may already have won the race.
+							return
+						}
+						packet = make([]byte, length)
+						if _, err := io.ReadFull(conn, packet); err != nil {
+							return
+						}
+					} else {
+						packet = make([]byte, 65535)
+						n, err := conn.Read(packet)
+						if err != nil {
+							return
+						}
+						packet = packet[:n]
+					}
+					response, err := answerDNS(packet)
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					if network == "tcp" {
+						binary.Write(conn, binary.BigEndian, uint16(len(response)))
+					}
+					conn.Write(response)
+				}()
+			}
+		}()
+	}
 	router.RegisterFallbackTCPHandler(func(_, destination netip.AddrPort) (func(net.Conn), bool) {
 		switch destination.String() {
-		case "192.0.2.53:53":
-			return func(conn net.Conn) {
-				defer conn.Close()
-				conn.SetDeadline(time.Now().Add(5 * time.Second))
-				var length uint16
-				if err := binary.Read(conn, binary.BigEndian, &length); err != nil {
-					t.Error(err)
-					return
-				}
-				packet := make([]byte, length)
-				if _, err := io.ReadFull(conn, packet); err != nil {
-					t.Error(err)
-					return
-				}
-				var message dnsmessage.Message
-				if err := message.Unpack(packet); err != nil || len(message.Questions) != 1 {
-					t.Errorf("invalid DNS query: %v", err)
-					return
-				}
-				question := message.Questions[0]
-				message.Response = true
-				message.RecursionAvailable = true
-				if question.Name.String() != "service.internal.example.com." {
-					t.Errorf("unexpected query for %s", question.Name)
-					return
-				}
-				switch question.Type {
-				case dnsmessage.TypeA:
-					sawA.Store(true)
-					message.Answers = []dnsmessage.Resource{testDNSAddress(question.Name.String(), "192.0.2.80")}
-				case dnsmessage.TypeAAAA:
-					sawAAAA.Store(true)
-				default:
-					t.Errorf("unexpected query type: %v", question.Type)
-					return
-				}
-				response, err := message.Pack()
-				if err != nil {
-					t.Error(err)
-					return
-				}
-				binary.Write(conn, binary.BigEndian, uint16(len(response)))
-				conn.Write(response)
-			}, true
 		case "192.0.2.80:80":
 			return func(conn net.Conn) {
 				defer conn.Close()
@@ -159,6 +189,36 @@ func TestSplitDNSThroughSubnetRouter(t *testing.T) {
 	if notification.NetMap == nil {
 		t.Fatal("missing authoritative network map")
 	}
+	prefs, err := lc.GetPrefs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Establish each real DNS transport before exercising the application's
+	// shorter raced lookup. A TSMP pong alone proves neither TCP nor UDP DNS is
+	// ready. These are single bounded exchanges, not retries of the assertion.
+	for _, transport := range []string{"udp", "tcp"} {
+		if !t.Run("DNS-"+transport, func(t *testing.T) {
+			probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			wire, err := queryRestrictedDNS(probeCtx, "service.internal.example.com.", "A", "192.0.2.53:53", func(ctx context.Context, network, address string) (net.Conn, error) {
+				if network != transport {
+					return nil, fmt.Errorf("probe uses only %s", transport)
+				}
+				return dialProxyDNS(ctx, client, notification.NetMap, prefs, network, address)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ips, _, err := splitDNSAnswers(wire, "service.internal.example.com.", dnsmessage.TypeA)
+			if err != nil || len(ips) != 1 || ips[0] != netip.MustParseAddr("192.0.2.80") {
+				t.Fatalf("DNS %s answer = %v, %v", transport, ips, err)
+			}
+		}) {
+			return
+		}
+	}
+	sawA.Store(false)
+	sawAAAA.Store(false)
 	host := &Host{ts: client, lc: lc, lastNetMap: notification.NetMap, lastSplitDNSDomains: configuredSplitDNSDomains(config), lastPrefs: &PrefsView{CorpDNS: true}}
 	conn, err := host.tsnetDialer(ctx, "tcp", "service.internal.example.com:80")
 	if err != nil {
