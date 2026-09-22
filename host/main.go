@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 
 	"golang.org/x/term"
+	// Register Taildrop's LocalAPI and PeerAPI handlers in the embedded node.
+	_ "tailscale.com/feature/taildrop"
 	"tailscale.com/hostinfo"
 )
 
