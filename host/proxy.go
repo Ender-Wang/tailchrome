@@ -19,6 +19,7 @@ import (
 
 	"tailscale.com/client/local"
 	"tailscale.com/client/web"
+	"tailscale.com/net/netutil"
 	"tailscale.com/net/proxymux"
 	"tailscale.com/net/socks5"
 	"tailscale.com/tailcfg"
@@ -53,7 +54,7 @@ func (h *Host) startProxy() (int, error) {
 		Logf:     func(string, ...any) {},
 		Username: h.proxyAuth.Username,
 		Password: h.proxyAuth.Password,
-		Dialer:   h.tsnetDialer,
+		Dialer:   h.socksDialer,
 	}
 	go func() {
 		if err := socksServer.Serve(socksLn); err != nil {
@@ -69,6 +70,54 @@ func (h *Host) startProxy() (int, error) {
 	}()
 
 	return port, nil
+}
+
+// socksDialer runs only after the SOCKS server has authenticated the process
+// credential. Firefox uses SOCKS for the local web client as well as tailnet
+// traffic; Quad100's HTTP service lives in this helper, not in tsnet's netstack.
+func (h *Host) socksDialer(ctx context.Context, network, addr string) (net.Conn, error) {
+	if network != "tcp" || addr != "100.100.100.100:80" {
+		return h.tsnetDialer(ctx, network, addr)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	client, server := net.Pipe()
+	webHTTP := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// This authenticated stream is a single local HTTP origin, never
+			// an additional forwarding proxy or CONNECT tunnel.
+			if r.Method == http.MethodConnect || !localWebAuthority(r.Host) ||
+				(r.URL.Host != "" && !localWebAuthority(r.URL.Host)) ||
+				(r.URL.Scheme != "" && r.URL.Scheme != "http") || r.URL.User != nil {
+				http.Error(w, "Invalid local web client request", http.StatusBadRequest)
+				return
+			}
+			r.Header.Del("Proxy-Authorization")
+			h.serveLocalWebClient(w, r)
+		}),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
+	go func() {
+		// Serve returns EOF after accepting its one connection; net/http
+		// continues serving and owns closing that connection. Do not close
+		// it when Serve returns or attach the request to the dial timeout.
+		webHTTP.Serve(netutil.NewOneConnListener(server, nil))
+	}()
+	return localWebSOCKSConn{client}, nil
+}
+
+func localWebAuthority(authority string) bool {
+	return authority == "100.100.100.100" || authority == "100.100.100.100:80"
+}
+
+type localWebSOCKSConn struct{ net.Conn }
+
+// The SOCKS server uses LocalAddr in its RFC 1928 reply. net.Pipe's placeholder
+// address is not a host:port and cannot be encoded in that reply.
+func (c localWebSOCKSConn) LocalAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}
 }
 
 // tsnetDialer dials through the tsnet.Server.
@@ -113,31 +162,10 @@ func (h *Host) httpProxyHandler() http.Handler {
 			host = h
 		}
 
-		// Route requests to 100.100.100.100 to the local web client. The
-		// authenticated loopback proxy is outside the tailnet, so present the
-		// request as originating from this tsnet node before the web client runs
-		// its separate control-plane authorization flow.
+		// The proxy credential has been checked before entering the local
+		// web client's separate control-plane authorization flow.
 		if host == "100.100.100.100" {
-			if r.Method == http.MethodPost && r.URL.Path == "/api/local/v0/logout" {
-				h.commandMu.Lock()
-				defer h.commandMu.Unlock()
-				h.handleWebLogoutLocked(w, r)
-				return
-			}
-			r, finish, ok := h.beginWebRequest(w, r)
-			if !ok {
-				http.Error(w, "Tailscale web client session is changing", http.StatusServiceUnavailable)
-				return
-			}
-			defer finish()
-			webServer, remoteAddr, err := h.currentWebServer(r.Context())
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusServiceUnavailable)
-				return
-			}
-			r.Header.Set("Sec-Tailscale", "browser-ext")
-			r.RemoteAddr = remoteAddr
-			webServer.ServeHTTP(w, r)
+			h.serveLocalWebClient(w, r)
 			return
 		}
 
@@ -150,6 +178,32 @@ func (h *Host) httpProxyHandler() http.Handler {
 		// Forward regular HTTP requests through tsnet.
 		proxy.ServeHTTP(w, r)
 	})
+}
+
+// serveLocalWebClient is entered only after HTTP or SOCKS proxy authentication.
+// Present the authenticated loopback request as coming from this tsnet node;
+// the web server still checks its browser session, capabilities and CSRF token.
+func (h *Host) serveLocalWebClient(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && r.URL.Path == "/api/local/v0/logout" {
+		h.commandMu.Lock()
+		defer h.commandMu.Unlock()
+		h.handleWebLogoutLocked(w, r)
+		return
+	}
+	r, finish, ok := h.beginWebRequest(w, r)
+	if !ok {
+		http.Error(w, "Tailscale web client session is changing", http.StatusServiceUnavailable)
+		return
+	}
+	defer finish()
+	webServer, remoteAddr, err := h.currentWebServer(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	r.Header.Set("Sec-Tailscale", "browser-ext")
+	r.RemoteAddr = remoteAddr
+	webServer.ServeHTTP(w, r)
 }
 
 // handleWebLogout runs the web client's authenticated logout as an account
