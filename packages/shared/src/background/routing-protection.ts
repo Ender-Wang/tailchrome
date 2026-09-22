@@ -73,8 +73,20 @@ function snapshot(value: unknown): Snapshot | null {
     sanitizeMagicDNSSuffix(raw.magicDNSSuffix) !== raw.magicDNSSuffix
   )
     return null;
-  const split = normalizeDomainSplit(raw.domainSplit);
-  if (JSON.stringify(split) !== JSON.stringify(raw.domainSplit)) return null;
+  if (!raw.domainSplit || typeof raw.domainSplit !== "object" || Array.isArray(raw.domainSplit)) {
+    return null;
+  }
+  const rawSplit = raw.domainSplit as Record<string, unknown>;
+  const split = normalizeDomainSplit(rawSplit);
+  // Browser storage can reorder object keys. Validate the actual constraints
+  // without treating a different property order as corrupted routing state.
+  if (
+    Object.keys(rawSplit).length !== 2 ||
+    rawSplit.mode !== split.mode ||
+    !Array.isArray(rawSplit.domains) ||
+    rawSplit.domains.length !== split.domains.length ||
+    rawSplit.domains.some((domain, index) => domain !== split.domains[index])
+  ) return null;
   return {
     scope: raw.scope,
     selectedExitNodeID: raw.selectedExitNodeID as string | null,

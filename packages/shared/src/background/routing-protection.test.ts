@@ -100,6 +100,58 @@ describe("routing protection", () => {
       proxyPort: null,
     });
   });
+  it.each([
+    { mode: "bypass" as const, domains: [] },
+    { mode: "only" as const, domains: ["work.example"] },
+  ])("restores routing when browser storage reorders split-setting keys: $mode", async (domainSplit) => {
+    const state = connected({ domainSplit, dnsRoutes: ["internal.example"] });
+    const routing = new RoutingProtection();
+    await routing.restore();
+    routing.confirmStatus(status(state), state);
+    await flush();
+
+    // Chrome serializes object keys alphabetically across a real restart.
+    // Keep every value intact while reproducing that storage representation.
+    saved[ROUTING_STORAGE_KEY] = JSON.parse(JSON.stringify(
+      saved[ROUTING_STORAGE_KEY],
+      (_key, value) => value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]))
+        : value,
+    ));
+    const restored = new RoutingProtection();
+    await restored.restore();
+    const disconnected = { ...offline(), domainSplit };
+    expect(restored.decorate(disconnected).routingPolicy).toMatchObject({
+      mode: "blocked", selectedExitNodeID: "exit1", dnsRoutes: ["internal.example"],
+    });
+    expect(restored.decorate(disconnected).routingPolicy?.blockAll).not.toBe(true);
+    restored.confirmStatus(status(state), state);
+    expect(restored.decorate(state).routingPolicy).toMatchObject({
+      mode: "active", selectedExitNodeID: "exit1", domainSplit,
+    });
+  });
+  it.each([
+    null,
+    { mode: "unknown", domains: [] },
+    { mode: "only", domains: "work.example" },
+    { mode: "only", domains: ["work.example", "work.example"] },
+    { mode: "only", domains: ["not a domain"] },
+    { domains: [] },
+    { mode: "bypass" },
+    { mode: "bypass", domains: [], extraConstraint: true },
+  ])("still blocks all traffic for malformed saved split constraints: %j", async (domainSplit) => {
+    const routing = new RoutingProtection();
+    await routing.restore();
+    routing.confirmStatus(status(connected()), connected());
+    await flush();
+    const stored = saved[ROUTING_STORAGE_KEY] as { active: { domainSplit: unknown } };
+    stored.active.domainSplit = domainSplit;
+    const restored = new RoutingProtection();
+    await restored.restore();
+    expect(restored.decorate(offline()).routingPolicy).toMatchObject({
+      mode: "blocked", blockAll: true,
+    });
+  });
   it("does not release protection on Stopped, login, or helper errors", async () => {
     const routing = new RoutingProtection();
     await routing.restore();
