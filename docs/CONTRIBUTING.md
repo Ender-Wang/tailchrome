@@ -82,9 +82,12 @@ Include your browser, OS, extension version, and steps to reproduce.
 ## Release Pipeline
 
 - PRs run extension tests, Chrome checks, the full Firefox review gate, Go
-  tests on Linux and Windows, per-user installer tests, a macOS package smoke
-  build with per-user launcher tests, Windows signature-verifier fixtures, and
-  Linux package metadata checks.
+  tests on Linux and Windows, per-user installer tests, and a Chrome Flatpak
+  helper smoke test. Relevant packaging changes also run native Windows ARM64
+  helper and installer smoke checks, a macOS package smoke build with per-user
+  launcher tests, Windows signature-verifier fixtures, and Linux package
+  metadata checks. Relevant Homebrew changes run formula checks on Linux and
+  macOS, plus cask validation on macOS.
 - A helper release first produces one immutable candidate artifact containing
   the extension archives, signed macOS/Windows helpers and installers, existing
   verified amd64/x86_64 Linux packages, Linux and Windows amd64/arm64 raw helpers,

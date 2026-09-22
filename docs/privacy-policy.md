@@ -1,6 +1,6 @@
 # Tailchrome Privacy Policy
 
-Last updated: 2026-09-08
+Last updated: 2026-09-21
 
 ## Summary
 
@@ -11,15 +11,16 @@ Tailchrome does not include analytics, advertising trackers, or data brokers. Th
 Tailchrome stores the following data locally in browser storage:
 
 - `profileId`: a generated identifier used to keep one Tailscale node per browser profile.
-- `lastExitNodeID`: the most recently selected exit node so it can be restored after reconnect.
 - `customUrls`: per-device custom open targets configured by the user.
 - `domainSplitConfig`: split-tunneling mode and domain list configured by the user.
 - `autoConnectOnStart`: the user's auto-connect preference.
 - `uiSurface`: whether the toolbar opens Tailchrome as a popup or in the browser's side panel/sidebar.
+- `routingProtectionV1`: sanitized, account-scoped routing snapshots used to keep protected traffic fail-closed across background or helper restarts. They can include control-server and node scope identifiers, the selected exit node, MagicDNS and restricted DNS names, known peer short names, subnet routes, split-tunneling rules, and pending routing transitions. Helper ports and proxy credentials are excluded.
+- `lastSessionWantRunning`: a temporary local-storage fallback for the current session's connect or disconnect intent across an extension update or reload. It is cleared at the next browser startup.
 - `autoConnectHandled` in session storage: a per-session flag used to avoid reconnecting automatically after an explicit manual disconnect.
+- `desiredWantRunning` in session storage: the current session's connect or disconnect intent, sent to the helper when it initializes so a helper restart preserves the user's most recent choice.
 - helper discovery retry progress in session storage: the retry source, next retry index, and absolute retry deadline used to resume an interrupted package or repair check.
 - the current-session registration repair recommendation, which is cleared after the helper initializes successfully.
-- `proxyConfig` in Firefox session storage: the active proxy port, MagicDNS suffix, restricted DNS domains, exit-node state, and subnet ranges needed to restore routing after the Firefox background context is suspended.
 
 This data stays on the local device unless the user exports or syncs their browser profile separately.
 

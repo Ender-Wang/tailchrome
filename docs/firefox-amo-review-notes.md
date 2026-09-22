@@ -33,13 +33,15 @@ Required to communicate with the local helper that runs the Tailscale node for t
 Required to keep stable per-profile state and user preferences:
 
 - `profileId`
-- `lastExitNodeID`
 - `customUrls`
 - `domainSplitConfig`
 - `autoConnectOnStart`
 - `uiSurface`
-- session-only `autoConnectHandled`
-- Firefox session-only `proxyConfig` restore state
+- local `routingProtectionV1` fail-closed routing snapshots (sanitized and
+  excluding helper ports and proxy credentials)
+- local `lastSessionWantRunning` reload/update fallback, cleared on browser startup
+- session-only `autoConnectHandled` and `desiredWantRunning` connection intent
+- session-only helper discovery retry and registration-repair state
 
 ### `contextMenus`
 
