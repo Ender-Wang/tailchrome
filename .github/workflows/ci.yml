@@ -84,7 +84,21 @@ jobs:
           package-manager-cache: false
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - run: pnpm e2e:chrome
+      - name: Run Chrome E2E smoke tests
+        env:
+          KEEP_E2E_ARTIFACTS: "true"
+          TMPDIR: ${{ runner.temp }}/tailchrome-e2e
+        shell: bash
+        run: |
+          mkdir -p "$TMPDIR"
+          pnpm e2e:chrome 2>&1 | tee "$TMPDIR/output.log"
+      - name: Preserve failed Chrome E2E artifacts
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: chrome-e2e-failure
+          path: ${{ runner.temp }}/tailchrome-e2e/
+          retention-days: 14
 
   build-chrome:
     runs-on: ubuntu-latest

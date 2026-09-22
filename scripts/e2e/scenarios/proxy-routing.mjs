@@ -1,16 +1,42 @@
-import { expectText, getProxyConfig, waitForPopup } from "../assertions.mjs";
-import { makeControl } from "../fixtures.mjs";
+import {
+  clickHeaderToggle,
+  expectText,
+  getProxyConfig,
+  waitForPopup,
+  waitForRequest,
+} from "../assertions.mjs";
+import { makeControl, makeRunningState, makeStoppedState } from "../fixtures.mjs";
 
 export const suite = "smoke";
 export const browsers = ["chrome"];
 
-export const control = () => makeControl();
+export const control = () => makeControl({
+  status: makeStoppedState(),
+  commandReplies: { up: { status: makeRunningState() } },
+});
 
-export async function run({ openPopup }) {
+export async function run({ openPopup, nativeHost }) {
   const page = await openPopup();
   try {
     await waitForPopup(page);
+    // A fresh profile defaults to disconnected. Explicitly connect before
+    // asserting routing, then wait for Chrome's asynchronous settings apply.
+    await clickHeaderToggle(page);
+    await waitForRequest(nativeHost, "up");
     await expectText(page, "example.ts.net");
+    await page.waitForFunction(
+      () => new Promise((resolve, reject) => {
+        chrome.proxy.settings.get({ incognito: false }, (details) => {
+          const error = chrome.runtime.lastError;
+          if (error) reject(new Error(error.message));
+          else resolve(
+            details.value.mode === "pac_script" &&
+            details.value.pacScript?.data.includes("PROXY 127.0.0.1:1055"),
+          );
+        });
+      }),
+      { timeout: 5_000 },
+    );
     const proxyConfig = await getProxyConfig(page);
 
     if (proxyConfig.mode !== "pac_script") {
