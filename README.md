@@ -122,9 +122,13 @@ targets. Explicit version pinning remains available; see the
 [Linux](packaging/linux/README.md) and [macOS](packaging/macos/README.md)
 instructions.
 
-Helper release differences do not disable the connection. Tailchrome keeps
-using the capabilities the installed helper advertises and shows a
-non-blocking release notice when versions differ. Helper diagnostic reports
+Helper version differences alone do not disable the connection: compatible
+helpers show a non-blocking release notice, and optional features use the
+capabilities the helper advertises. **Upgrade the extension and helper together
+for v0.1.14.** Its authenticated proxy is a required capability: the new extension
+rejects older helpers without it, and older extensions cannot authenticate to
+the new helper. Complete both updates before resuming protected browsing.
+Helper diagnostic reports
 are created only when you choose **Copy diagnostic report** or
 **Export diagnostic report**; they remain local until you copy, save, or share
 them.

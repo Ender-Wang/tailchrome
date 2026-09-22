@@ -140,7 +140,7 @@ Last updated: 2026-09-21
 | Ping peers (`tailscale ping`)              | Yes           | Yes        | Online peers expose a Ping action when the helper advertises support; results appear as a diagnostic toast. |
 | Helper diagnostic report                   | Yes           | Partial    | User-initiated local copy/export covers helper activation state and sanitized errors; it excludes browsing, authentication, tailnet, peer, profile, and traffic data. |
 | Debug logging                              | Yes           | Partial    | Native host logs to stderr (visible when launched from terminal); extension logs to browser devtools console |
-| Version display                            | Yes           | Yes        | The connected footer shows the native helper version. A different release produces a non-blocking notice; advertised capability flags gate individual controls. |
+| Version display                            | Yes           | Yes        | The connected footer shows the native helper version. A version difference alone produces a non-blocking notice; authenticated-proxy support is required, and advertised capability flags gate optional controls. Update the helper and extension together from v0.1.13 or earlier. |
 
 
 ---

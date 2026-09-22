@@ -4,6 +4,12 @@ The commands on this page describe v0.1.14 and later. The helper release must
 be published before the matching extension is distributed. For older releases,
 use their attached installer instructions and legacy flags.
 
+Upgrade the helper and extension together from v0.1.13 or earlier. v0.1.14
+requires an authenticated proxy: its extension rejects an older helper without
+credentials, and an older extension cannot authenticate to its helper. Complete
+both updates before resuming protected browsing. Version differences alone
+remain informational when the required protocol is supported.
+
 ## One installation for your account
 
 The popup selects the setup flow for your operating system. Linux uses one

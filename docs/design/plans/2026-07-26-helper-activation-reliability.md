@@ -6,6 +6,11 @@
 > registration CLI points at installer-owned executables; legacy flags remain
 > compatible. Existing release verification and explicit signing-mode gates
 > continue to apply as documented in the current release workflow and policy.
+> The later authenticated-proxy work also supersedes this plan's claim that
+> no current reply produces `helper-incompatible`: v0.1.14 requires a valid
+> proxy session and must be upgraded together with its extension. Version
+> strings alone remain informational; see the current
+> [helper compatibility contract](../../DOCUMENTATION.md#helper-compatibility).
 
 **Goal:** Make helper setup and recovery dependable across supported platforms by distinguishing registration, permission, launch, runtime, and compatibility failures; keeping package installers primary; providing a verified per-user repair fallback; shipping a Linux ARM64 raw helper; and publishing Windows artifacts only after one stable publisher identity, valid signatures, and exact-artifact security checks are in place.
 

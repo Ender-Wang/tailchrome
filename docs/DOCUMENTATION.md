@@ -148,7 +148,7 @@ Each browser profile gets its own isolated Tailscale identity, meaning you can b
 - **Reliable helper activation** -- package downloads start a session-persisted discovery retry schedule; current-user registration repair is promoted only if package discovery still fails
 - **Actionable helper recovery** -- missing registration, permission denial, startup failure, unexpected stop, helper-reported errors, and explicit protocol incompatibility have distinct recovery copy
 - **Local helper diagnostics** -- on-demand copy/export produces a bounded, allowlisted report with sensitive values redacted; nothing is submitted automatically
-- **Non-blocking version notices** -- a helper/release version difference is informational; optional commands remain gated by advertised capabilities
+- **Non-blocking version notices** -- a helper/release version difference alone is informational; authenticated-proxy support is required, while optional commands remain gated by advertised capabilities
 - **Exit node persistence** -- last-selected exit node restored automatically after reconnection
 - **Toast notifications** -- in-popup toasts for operations (file send, errors, suggestions)
 - **Keyboard navigation** -- peer list supports arrow key navigation
@@ -538,7 +538,7 @@ interface TailscaleState {
 | `helper-start-failed` | The browser found the host, but startup failed before a healthy connection | Retry, package repair, and local diagnostics |
 | `helper-stopped` | A previously healthy helper connection closed | Automatic reconnect plus manual retry |
 | `helper-reported-error` | The helper started and returned an explicit startup/protocol error | Retry, package repair, and local diagnostics |
-| `helper-incompatible` | An explicit unsupported future protocol is reported | Compatible release installer update/repair; a version string alone never causes this state |
+| `helper-incompatible` | The helper omits a valid supported authenticated-proxy session (`helper-proxy-auth-required`) | Update the helper and extension together; a version string alone never causes this state |
 
 Starting a package or verified repair records a retry deadline in
 `chrome.storage.session`. Attempts run after 2, 5, 10, 20, and 30 seconds and
@@ -1186,10 +1186,22 @@ For a configured custom coordination server, delegated login URLs may use anothe
 ### Helper compatibility
 
 The extension does not infer protocol incompatibility from semantic versions.
-An installed/release version difference produces only a dismissible notice, and
-features are enabled from the capabilities advertised by the connected helper.
-Setup is blocked only when the helper explicitly reports an unsupported future
-protocol.
+A version difference alone produces a dismissible notice. Optional features
+are enabled from the capabilities advertised by the connected helper.
+
+Authenticated-proxy support is mandatory starting with v0.1.14. The helper must
+provide a valid `procRunning.proxyAuth` session using the supported protocol
+version and a valid proxy port. Missing or invalid session credentials produce
+`helper-incompatible` with diagnostic code `helper-proxy-auth-required`, and the
+extension does not enable that proxy.
+
+Upgrade the helper and extension together from v0.1.13 or earlier. The older
+helper does not provide proxy credentials; the older extension uses
+unauthenticated SOCKS and cannot authenticate to the new helper. Consequently,
+neither mixed pair can provide normal protected browsing. Publish the matching
+helper assets before the store rollout, and complete both updates before
+resuming protected browsing. A version-only compatibility test must use a
+helper fixture that supplies the required authenticated session.
 
 ### Helper artifacts
 
