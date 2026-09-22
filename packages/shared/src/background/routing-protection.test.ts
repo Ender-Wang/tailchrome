@@ -100,6 +100,58 @@ describe("routing protection", () => {
       proxyPort: null,
     });
   });
+  it.each([
+    { mode: "bypass" as const, domains: [] },
+    { mode: "only" as const, domains: ["work.example"] },
+  ])("restores routing when browser storage reorders split-setting keys: $mode", async (domainSplit) => {
+    const state = connected({ domainSplit, dnsRoutes: ["internal.example"] });
+    const routing = new RoutingProtection();
+    await routing.restore();
+    routing.confirmStatus(status(state), state);
+    await flush();
+
+    // Chrome serializes object keys alphabetically across a real restart.
+    // Keep every value intact while reproducing that storage representation.
+    saved[ROUTING_STORAGE_KEY] = JSON.parse(JSON.stringify(
+      saved[ROUTING_STORAGE_KEY],
+      (_key, value) => value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]))
+        : value,
+    ));
+    const restored = new RoutingProtection();
+    await restored.restore();
+    const disconnected = { ...offline(), domainSplit };
+    expect(restored.decorate(disconnected).routingPolicy).toMatchObject({
+      mode: "blocked", selectedExitNodeID: "exit1", dnsRoutes: ["internal.example"],
+    });
+    expect(restored.decorate(disconnected).routingPolicy?.blockAll).not.toBe(true);
+    restored.confirmStatus(status(state), state);
+    expect(restored.decorate(state).routingPolicy).toMatchObject({
+      mode: "active", selectedExitNodeID: "exit1", domainSplit,
+    });
+  });
+  it.each([
+    null,
+    { mode: "unknown", domains: [] },
+    { mode: "only", domains: "work.example" },
+    { mode: "only", domains: ["work.example", "work.example"] },
+    { mode: "only", domains: ["not a domain"] },
+    { domains: [] },
+    { mode: "bypass" },
+    { mode: "bypass", domains: [], extraConstraint: true },
+  ])("still blocks all traffic for malformed saved split constraints: %j", async (domainSplit) => {
+    const routing = new RoutingProtection();
+    await routing.restore();
+    routing.confirmStatus(status(connected()), connected());
+    await flush();
+    const stored = saved[ROUTING_STORAGE_KEY] as { active: { domainSplit: unknown } };
+    stored.active.domainSplit = domainSplit;
+    const restored = new RoutingProtection();
+    await restored.restore();
+    expect(restored.decorate(offline()).routingPolicy).toMatchObject({
+      mode: "blocked", blockAll: true,
+    });
+  });
   it("does not release protection on Stopped, login, or helper errors", async () => {
     const routing = new RoutingProtection();
     await routing.restore();
@@ -119,7 +171,7 @@ describe("routing protection", () => {
     const routing = new RoutingProtection();
     await routing.restore();
     routing.confirmStatus(status(connected()), connected());
-    routing.switchProfile();
+    routing.switchProfile(connected());
     const needsLogin = connected({ backendState: "NeedsLogin", selfNode: null, prefs: null, exitNode: null });
     routing.confirmStatus(status(needsLogin), needsLogin);
     expect(routing.decorate(needsLogin).routingPolicy?.mode).toBe("blocked");
@@ -389,11 +441,81 @@ describe("routing protection", () => {
     const routing = new RoutingProtection();
     await routing.restore();
     routing.confirmStatus(status(connected()), connected());
-    routing.switchProfile();
+    routing.switchProfile(connected());
     routing.confirmStatus(status(connected()), connected());
     expect(routing.decorate(connected()).routingPolicy).toMatchObject({
       mode: "blocked",
       blockAll: true,
+    });
+  });
+
+  it.each([false, true])("restores a saved account after an empty profile (worker restart: %s)", async (restart) => {
+    let routing = new RoutingProtection();
+    await routing.restore();
+    const original = connected();
+    routing.confirmStatus(status(original), original);
+    routing.switchProfile(original);
+    const empty = connected({
+      backendState: "NeedsLogin", selfNode: null, prefs: null, exitNode: null,
+    });
+    routing.confirmStatus(status(empty), empty);
+    // An empty status alone must not release the transition or admit an old
+    // queued status. Returning requires another explicit profile selection.
+    routing.confirmStatus(status(original), original);
+    expect(routing.decorate(original).routingPolicy).toMatchObject({
+      mode: "blocked", blockAll: true,
+    });
+    routing.switchProfile(empty);
+    if (restart) {
+      await flush();
+      routing = new RoutingProtection();
+      await routing.restore();
+    }
+    // Preserve this account's saved exit choice until the helper confirms it.
+    const pendingExit = connected({ prefs: { ...prefs, exitNodeID: "" }, exitNode: null });
+    routing.confirmStatus(status(pendingExit), pendingExit);
+    expect(routing.decorate(pendingExit).routingPolicy).toMatchObject({
+      mode: "blocked", selectedExitNodeID: "exit1",
+    });
+    expect(routing.decorate(pendingExit).routingPolicy?.blockAll).not.toBe(true);
+    routing.confirmStatus(status(original), original);
+    expect(routing.decorate(original).routingPolicy).toMatchObject({
+      mode: "active", selectedExitNodeID: "exit1",
+    });
+  });
+
+  it.each([
+    { backendState: "Running", selfNode: null },
+    { backendState: "Starting", selfNode: null },
+    { backendState: "Stopped", selfNode: null },
+    { backendState: "NoState", selfNode: null },
+    { backendState: "NeedsLogin", prefs: null },
+    { backendState: "NeedsLogin", selfNode: null, hostConnected: false },
+    { backendState: "NeedsLogin", selfNode: null, initialized: false },
+  ] as const)("does not treat incomplete $backendState status as an empty profile", async (overrides) => {
+    const routing = new RoutingProtection();
+    await routing.restore();
+    routing.confirmStatus(status(connected()), connected());
+    routing.switchProfile(connected(overrides));
+    routing.confirmStatus(status(connected()), connected());
+    expect(routing.decorate(connected()).routingPolicy).toMatchObject({
+      mode: "blocked", blockAll: true,
+    });
+  });
+
+  it.each([undefined, 42, "x".repeat(4097)])("keeps legacy or malformed transition boundaries closed", async (transitionScope) => {
+    const routing = new RoutingProtection();
+    await routing.restore();
+    routing.confirmStatus(status(connected()), connected());
+    routing.switchProfile(connected());
+    await flush();
+    const stored = saved[ROUTING_STORAGE_KEY] as Record<string, unknown>;
+    stored.transitionScope = transitionScope;
+    const restored = new RoutingProtection();
+    await restored.restore();
+    restored.confirmStatus(status(connected()), connected());
+    expect(restored.decorate(connected()).routingPolicy).toMatchObject({
+      mode: "blocked", blockAll: true,
     });
   });
 

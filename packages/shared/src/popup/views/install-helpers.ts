@@ -26,17 +26,31 @@ export interface InstallerDownload {
 
 const RELEASES_BASE =
   "https://github.com/dantraynor/tailchrome/releases";
+const RELEASE_VERSION_PATTERN =
+  /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 
-function currentReleaseVersion(): string {
-  return chrome.runtime.getManifest().version.replace(/^v/, "");
+/**
+ * The extension manifest is normally validated by Chrome, but keep release
+ * URLs and shell commands safe even if a malformed value reaches this view.
+ */
+function currentReleaseTag(): string | null {
+  const rawVersion = String(chrome.runtime.getManifest().version ?? "").replace(
+    /^v/,
+    "",
+  );
+  return RELEASE_VERSION_PATTERN.test(rawVersion) ? `v${rawVersion}` : null;
 }
 
-function releaseAssetURL(filename: string): string {
-  return `${RELEASES_BASE}/download/v${currentReleaseVersion()}/${filename}`;
+function releaseAssetURL(filename: string): string | null {
+  const tag = currentReleaseTag();
+  return tag
+    ? `${RELEASES_BASE}/download/${tag}/${filename}`
+    : null;
 }
 
 function releasePageURL(): string {
-  return `${RELEASES_BASE}/tag/v${currentReleaseVersion()}`;
+  const tag = currentReleaseTag();
+  return tag ? `${RELEASES_BASE}/tag/${tag}` : RELEASES_BASE;
 }
 
 export function normalizeInstallerPlatform(
@@ -71,86 +85,60 @@ async function getInstallerPlatform(): Promise<InstallerPlatform> {
   }
 }
 
+function downloadFor(filename: string, label: string): InstallerDownload[] {
+  const url = releaseAssetURL(filename);
+  return url ? [{ filename, label, url }] : [];
+}
+
 /**
- * Returns package-first installer downloads for the detected platform.
+ * Returns the supported release installer for the detected platform. The
+ * first item is always the primary per-user path; package alternatives are
+ * rendered separately and remain collapsed in the popup.
  */
 export function installerDownloads(
   platform: Platform,
   architecture: InstallerArchitecture,
 ): InstallerDownload[] {
-  if (
-    platform === "macos" &&
-    (architecture === "amd64" || architecture === "arm64")
-  ) {
-    const filename = "tailchrome-helper-macos.pkg";
-    return [
-      {
-        filename,
-        label: "Download macOS installer (.pkg)",
-        url: releaseAssetURL(filename),
-      },
-    ];
+  if (platform === "linux" && (architecture === "amd64" || architecture === "arm64")) {
+    return downloadFor(
+      "tailchrome-install.sh",
+      "Use the per-user Linux installer",
+    );
   }
-  if (
-    platform === "windows" &&
-    (architecture === "amd64" || architecture === "arm64")
-  ) {
-    const filename = "tailchrome-helper-windows-x64.msi";
-    return [
-      {
-        filename,
-        label: "Download Windows installer (.msi)",
-        url: releaseAssetURL(filename),
-      },
-    ];
+  if (platform === "macos" && (architecture === "amd64" || architecture === "arm64")) {
+    return downloadFor(
+      "tailchrome-helper-macos-user.zip",
+      "Download the signed helper app (.zip)",
+    );
   }
-  if (platform === "linux" && architecture === "amd64") {
-    const deb = "tailchrome-helper-linux-amd64.deb";
-    const rpm = "tailchrome-helper-linux-x86_64.rpm";
-    return [
-      {
-        filename: deb,
-        label: "Download .deb (Debian/Ubuntu)",
-        url: releaseAssetURL(deb),
-      },
-      {
-        filename: rpm,
-        label: "Download .rpm (Fedora/RHEL)",
-        url: releaseAssetURL(rpm),
-      },
-    ];
+  if (platform === "windows" && architecture === "amd64") {
+    return downloadFor(
+      "tailchrome-helper-windows-x64.msi",
+      "Download the per-user installer (.msi)",
+    );
   }
-  if (platform === "linux" && architecture === "arm64") {
-    const filename = "tailchrome-install.sh";
-    return [
-      {
-        filename,
-        label: "Download verified Linux ARM64 installer",
-        url: releaseAssetURL(filename),
-      },
-    ];
+  if (platform === "windows" && architecture === "arm64") {
+    return downloadFor(
+      "tailchrome-install.ps1",
+      "Copy the native ARM64 PowerShell command",
+    );
   }
   return [
     {
       filename: null,
-      label: "Open latest release",
+      label: "Open release information",
       url: releasePageURL(),
     },
   ];
 }
 
-/**
- * Returns the filename of the raw native host binary for advanced fallback use.
- */
+/** Returns the raw native host asset for advanced fallback use. */
 export function binaryFilename(
   platform: Platform,
   architecture: InstallerArchitecture,
 ): string | null {
-  if (
-    platform === "windows" &&
-    (architecture === "amd64" || architecture === "arm64")
-  ) {
-    return "tailscale-browser-ext-windows-amd64.exe";
+  if (platform === "windows" && (architecture === "amd64" || architecture === "arm64")) {
+    return `tailscale-browser-ext-windows-${architecture}.exe`;
   }
   if (platform === "linux" && architecture !== "unknown") {
     return `tailscale-browser-ext-linux-${architecture}`;
@@ -161,48 +149,48 @@ export function binaryFilename(
   return null;
 }
 
-/**
- * Returns the download URL for the raw native host binary.
- */
+/** Returns the download URL for the raw native host binary. */
 export function buildDownloadURL(
   platform: Platform,
   architecture: InstallerArchitecture,
 ): string {
   const filename = binaryFilename(platform, architecture);
-  if (filename) {
-    return releaseAssetURL(filename);
-  }
-  return releasePageURL();
+  const url = filename ? releaseAssetURL(filename) : null;
+  return url ?? releasePageURL();
 }
 
-/**
- * Returns the command for the version-pinned verified repair installer.
- */
-function repairRunCommand(
+function supportsInstaller(
   platform: Platform,
   architecture: InstallerArchitecture,
-): string | null {
-  const version = `v${currentReleaseVersion()}`;
-  if (
-    (platform === "macos" || platform === "linux") &&
+): boolean {
+  return (
+    (platform === "linux" || platform === "macos" || platform === "windows") &&
     (architecture === "amd64" || architecture === "arm64")
-  ) {
-    return `bash ~/Downloads/tailchrome-install.sh --version "${version}"`;
+  );
+}
+
+function unixInstallCommand(): string | null {
+  const tag = currentReleaseTag();
+  const scriptURL = releaseAssetURL("tailchrome-install.sh");
+  if (!tag || !scriptURL) {
+    return null;
   }
-  if (
-    platform === "windows" &&
-    (architecture === "amd64" || architecture === "arm64")
-  ) {
-    return "powershell.exe -NoProfile -Command \"msiexec.exe /fa (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads\\tailchrome-helper-windows-x64.msi')\"";
+  return `curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 '${scriptURL}' | bash -s -- --version '${tag}'`;
+}
+
+function powershellInstallCommand(): string | null {
+  const tag = currentReleaseTag();
+  const scriptURL = releaseAssetURL("tailchrome-install.ps1");
+  if (!tag || !scriptURL) {
+    return null;
   }
-  return null;
+  return `& ([scriptblock]::Create((Invoke-RestMethod -Uri '${scriptURL}'))) -Version '${tag}'`;
 }
 
 /**
  * Asks the background service worker to poll native-host discovery after the
- * user starts an installer. The background owns the retry timers: opening the
- * download tab closes the popup surface, which would destroy any timers
- * scheduled in this document before they fire.
+ * user starts an installer. The background owns retry timers because opening
+ * a download tab closes this popup document.
  */
 export function requestNativeHostRetries(
   source: "package" | "fallback" | "manual",
@@ -210,9 +198,6 @@ export function requestNativeHostRetries(
   sendMessage({ type: "retry-native-host", source });
 }
 
-/**
- * Returns a human-readable platform label.
- */
 function platformLabel(platform: Platform): string {
   switch (platform) {
     case "macos":
@@ -226,9 +211,7 @@ function platformLabel(platform: Platform): string {
   }
 }
 
-/**
- * Renders the helper install and registration-repair flow.
- */
+/** Renders one install/repair flow for both first setup and recovery. */
 export async function renderInstallFlow(
   root: HTMLElement,
   opts: { mode: "install"; state: TailscaleState },
@@ -236,7 +219,7 @@ export async function renderInstallFlow(
   root.textContent = "";
   const pending = document.createElement("div");
   pending.className = "centered-view-text";
-  pending.textContent = "Preparing helper options\u2026";
+  pending.textContent = "Preparing helper setup…";
   root.appendChild(pending);
 
   const { platform, architecture } = await getInstallerPlatform();
@@ -247,9 +230,8 @@ export async function renderInstallFlow(
   root.textContent = "";
   const view = document.createElement("div");
   view.className = "view";
-
   const content = document.createElement("div");
-  content.className = "centered-view";
+  content.className = "centered-view install-view";
 
   const icon = document.createElement("div");
   icon.className = "centered-view-icon";
@@ -264,18 +246,15 @@ export async function renderInstallFlow(
     opts.state.repairRegistrationAvailable ||
     opts.state.helperFailure?.kind === "helper-not-allowed";
   title.textContent = repairProminent
-    ? "Repair registration"
-    : "Quick Setup";
+    ? "Set up or repair Tailchrome"
+    : "Set up Tailchrome";
 
   const description = document.createElement("p");
   description.className = "centered-view-text";
   description.textContent = helperFailureDescription(
     opts.state.helperFailure?.kind,
   );
-
-  content.appendChild(icon);
-  content.appendChild(title);
-  content.appendChild(description);
+  content.append(icon, title, description);
 
   if (repairProminent) {
     const repair = document.createElement("div");
@@ -284,104 +263,27 @@ export async function renderInstallFlow(
     repairTitle.textContent = "Repair registration for this browser";
     const repairBody = document.createElement("p");
     repairBody.textContent =
-      "Restore current-user registration with the verified repair below, then retry discovery. Your Tailscale session is not changed.";
+      "Use the same per-user setup below to restore registration. Your Tailscale session is not changed.";
     repair.append(repairTitle, repairBody);
     content.appendChild(repair);
   }
 
-  const downloads = installerDownloads(platform, architecture);
-  const filename = downloads[0]?.filename ?? null;
-  const unsupported =
-    platform === "unknown" || architecture === "unknown";
-  const repairActionAvailable =
-    repairRunCommand(platform, architecture) !== null;
-  if (repairProminent && repairActionAvailable) {
-    content.appendChild(
-      createVerifiedRepairFallback(platform, architecture, true),
-    );
+  const supported = supportsInstaller(platform, architecture);
+  content.appendChild(createPrimaryInstall(platform, architecture));
+  if (supported) {
+    content.appendChild(createAlternativeInstallDetails(platform, architecture));
   }
 
-  if (platform === "macos" && !unsupported) {
-    content.appendChild(createPerUserMacInstall());
-  } else if (platform === "linux" && architecture === "amd64" && !repairProminent) {
-    content.appendChild(createVerifiedRepairFallback(platform, architecture, true, true));
-  }
-
-  if (!unsupported) {
-    const policy = document.createElement("p");
-    policy.className = "install-step-hint";
-    policy.textContent =
-      "Your organization’s browser policy may still block extensions or native messaging.";
-    content.appendChild(policy);
-  }
-
-  const steps = document.createElement("div");
-  steps.className = "install-steps";
-  const showPackageInstall =
-    opts.state.helperFailure?.kind !== "helper-not-allowed" &&
-    !(repairProminent && platform === "linux" && architecture === "arm64");
-
-  if (showPackageInstall) {
-    const step1 = createStep("1");
-    step1.label.textContent = repairProminent
-      ? "Or reinstall the release package"
-      : unsupported
-        ? "Open release information"
-        : platform === "macos" || (platform === "linux" && architecture === "amd64")
-          ? "Or install for all users (administrator access required)"
-          : "Install for this user — no administrator access required";
-
-    const cta = document.createElement("div");
-    cta.className = "install-pkg-cta";
-    for (const download of downloads) {
-      const retrySource =
-        download.filename === null
-          ? null
-          : download.filename === "tailchrome-install.sh"
-            ? "fallback"
-            : "package";
-      cta.appendChild(createDownloadButton(download, retrySource));
-    }
-    step1.content.appendChild(step1.label);
-    step1.content.appendChild(cta);
-    steps.appendChild(step1.root);
-
-    const step2 = createStep("2");
-    step2.label.textContent =
-      unsupported
-        ? "Review supported releases"
-        : "Run the installer";
-    step2.content.appendChild(step2.label);
-    step2.content.appendChild(
-      createInstallInstructions(platform, architecture, filename),
-    );
-    steps.appendChild(step2.root);
-
-    const step3 = createStep("3");
-    step3.label.textContent = "Finish";
-    const doneBody = document.createElement("div");
-    doneBody.className = "install-step-body";
-    doneBody.textContent = unsupported
-      ? "Return after installing a supported helper build, then retry discovery."
-      : "Leave this popup open or reopen it after setup. Tailchrome will retry automatically.";
-    step3.content.appendChild(step3.label);
-    step3.content.appendChild(doneBody);
-    step3.content.appendChild(createDiscoveryRetryButton());
-    steps.appendChild(step3.root);
-    content.appendChild(steps);
-  } else {
-    content.appendChild(createDiscoveryRetryButton());
-  }
-
-  if (
-    !repairProminent &&
-    repairActionAvailable &&
-    platform === "windows"
-  ) {
-    content.appendChild(
-      createVerifiedRepairFallback(platform, architecture, false),
-    );
-  }
+  const next = document.createElement("div");
+  next.className = "helper-install-next";
+  const nextTitle = document.createElement("strong");
+  nextTitle.textContent = supported ? "After setup" : "Supported releases";
+  const nextBody = document.createElement("p");
+  nextBody.textContent = supported
+    ? "The installer verifies the helper and registers it for your account. Tailchrome will retry discovery automatically."
+    : "Tailchrome cannot identify a supported operating system and architecture, so it will not guess an asset.";
+  next.append(nextTitle, nextBody, createDiscoveryRetryButton());
+  content.appendChild(next);
 
   if (opts.state.helperFailure) {
     appendHelperDiagnosticActions(content, opts.state);
@@ -392,48 +294,232 @@ export async function renderInstallFlow(
   root.appendChild(view);
 }
 
-function createPerUserMacInstall(): HTMLElement {
-  const section = document.createElement("div");
-  section.className = "install-per-user install-advanced-section";
+function createPrimaryInstall(
+  platform: Platform,
+  architecture: InstallerArchitecture,
+): HTMLElement {
+  const card = document.createElement("section");
+  card.className = "helper-install-primary";
+
+  const heading = document.createElement("h3");
+  heading.textContent = primaryHeading(platform, architecture);
+  card.appendChild(heading);
+
+  const instructions = document.createElement("p");
+  instructions.className = "install-step-body";
+  instructions.textContent = primaryInstructions(platform, architecture);
+  card.appendChild(instructions);
+
+  const supported = supportsInstaller(platform, architecture);
+  const downloads = supported ? installerDownloads(platform, architecture) : [];
+  const primary = downloads[0];
+  if (!primary) {
+    card.appendChild(createReleaseLink());
+  } else if (platform === "linux" || (platform === "windows" && architecture === "arm64")) {
+    const command =
+      platform === "linux" ? unixInstallCommand() : powershellInstallCommand();
+    if (command) {
+      card.appendChild(createCodeBlock(command));
+    } else {
+      card.appendChild(createReleaseLink());
+    }
+  } else {
+    card.appendChild(createDownloadButton(primary, "package"));
+  }
+
+  const hint = document.createElement("p");
+  hint.className = "install-step-hint";
+  hint.textContent = primaryHint(platform, architecture);
+  card.appendChild(hint);
+  return card;
+}
+
+function primaryHeading(
+  platform: Platform,
+  architecture: InstallerArchitecture,
+): string {
+  if (platform === "linux" && (architecture === "amd64" || architecture === "arm64")) {
+    return "Install for your user";
+  }
+  if (platform === "macos" && (architecture === "amd64" || architecture === "arm64")) {
+    return "Install the signed app for your user";
+  }
+  if (platform === "windows" && architecture === "arm64") {
+    return "Install natively for Windows ARM64";
+  }
+  if (platform === "windows" && (architecture === "amd64" || architecture === "arm64")) {
+    return "Install for your user";
+  }
+  return "Choose a supported release";
+}
+
+function primaryInstructions(
+  platform: Platform,
+  architecture: InstallerArchitecture,
+): string {
+  if (platform === "linux" && (architecture === "amd64" || architecture === "arm64")) {
+    return "Copy this version-pinned command into a terminal and run it. No administrator access is required.";
+  }
+  if (platform === "macos" && (architecture === "amd64" || architecture === "arm64")) {
+    return "Download the signed ZIP, open it, then open Tailchrome Helper. It installs and registers the helper for your account.";
+  }
+  if (platform === "windows" && architecture === "arm64") {
+    return "Copy this command into PowerShell. It downloads the release script over HTTPS and verifies the native ARM64 helper.";
+  }
+  if (platform === "windows" && (architecture === "amd64" || architecture === "arm64")) {
+    return "Download and open the MSI. It installs and registers the helper for your account without administrator access.";
+  }
+  return "Open release information to find a supported installer.";
+}
+
+function primaryHint(
+  platform: Platform,
+  architecture: InstallerArchitecture,
+): string {
+  if (
+    (platform === "linux" || platform === "windows") &&
+    (architecture === "amd64" || architecture === "arm64")
+  ) {
+    return "Rerunning this setup repairs registration too.";
+  }
+  if (platform === "macos" && (architecture === "amd64" || architecture === "arm64")) {
+    return "Reopen Tailchrome Helper to repair setup.";
+  }
+  return `Runtime platform information for ${platformLabel(platform)} is unsupported.`;
+}
+
+function createAlternativeInstallDetails(
+  platform: Platform,
+  architecture: InstallerArchitecture,
+): HTMLElement {
+  const details = document.createElement("details");
+  details.className = "helper-install-alternatives";
+  const summary = document.createElement("summary");
+  summary.textContent = "Other installation options";
+  details.appendChild(summary);
+
+  if (platform === "linux") {
+    if (architecture === "amd64") {
+      appendAlternativeHeading(details, "System packages");
+      appendDownloadIfAvailable(
+        details,
+        "tailchrome-helper-linux-amd64.deb",
+        "Download Debian/Ubuntu package (.deb)",
+      );
+      appendDownloadIfAvailable(
+        details,
+        "tailchrome-helper-linux-x86_64.rpm",
+        "Download Fedora/RHEL package (.rpm)",
+      );
+    }
+    appendAdvancedDocs(details);
+    return details;
+  }
+
+  if (platform === "macos") {
+    appendAlternativeHeading(details, "Terminal option");
+    appendCommandIfAvailable(details, unixInstallCommand());
+    appendAlternativeHeading(details, "System installer");
+    appendDownloadIfAvailable(
+      details,
+      "tailchrome-helper-macos.pkg",
+      "Download macOS installer (.pkg)",
+    );
+    appendAdvancedDocs(details);
+    return details;
+  }
+
+  if (platform === "windows" && architecture === "amd64") {
+    appendAlternativeHeading(details, "PowerShell option");
+    appendCommandIfAvailable(details, powershellInstallCommand());
+    appendAdvancedDocs(details);
+    return details;
+  }
+
+  if (platform === "windows" && architecture === "arm64") {
+    appendAlternativeHeading(details, "x64 package (runs under emulation)");
+    const explanation = document.createElement("p");
+    explanation.className = "install-step-body";
+    explanation.textContent =
+      "Use this only if the native PowerShell option is unavailable. The MSI contains the x64 helper and Windows runs it through x64 emulation.";
+    details.appendChild(explanation);
+    appendDownloadIfAvailable(
+      details,
+      "tailchrome-helper-windows-x64.msi",
+      "Download x64 MSI (emulation alternative)",
+    );
+    appendAdvancedDocs(details);
+  }
+  return details;
+}
+
+function appendAlternativeHeading(container: HTMLElement, text: string): void {
   const heading = document.createElement("strong");
-  heading.textContent = "Install for this user — no administrator access required";
-  const body = document.createElement("p");
-  body.className = "install-step-body";
-  body.textContent =
-    "Open the downloaded ZIP, then open Tailchrome Helper. It installs and registers the helper for your account.";
-  section.append(
-    heading,
-    createDownloadButton({
-      filename: "tailchrome-helper-macos-user.zip",
-      label: "Download macOS helper app (.zip)",
-      url: releaseAssetURL("tailchrome-helper-macos-user.zip"),
-    }, "package"),
-    body,
+  heading.className = "helper-install-alternative-heading";
+  heading.textContent = text;
+  container.appendChild(heading);
+}
+
+function appendDownloadIfAvailable(
+  container: HTMLElement,
+  filename: string,
+  label: string,
+): void {
+  const url = releaseAssetURL(filename);
+  if (url) {
+    container.appendChild(
+      createDownloadButton({ filename, label, url }, "package"),
+    );
+  }
+}
+
+function appendCommandIfAvailable(
+  container: HTMLElement,
+  command: string | null,
+): void {
+  if (command) {
+    container.appendChild(createCodeBlock(command));
+  }
+}
+
+function appendAdvancedDocs(container: HTMLElement): void {
+  const docs = document.createElement("a");
+  docs.className = "install-advanced-docs";
+  docs.href =
+    "https://github.com/dantraynor/tailchrome/blob/main/docs/helper-installation.md";
+  docs.target = "_blank";
+  docs.rel = "noopener";
+  docs.textContent = "Advanced installation and verification details";
+  container.appendChild(docs);
+}
+
+function createReleaseLink(): HTMLAnchorElement {
+  return createDownloadButton(
+    {
+      filename: null,
+      label: "Open release information",
+      url: releasePageURL(),
+    },
+    null,
   );
-  return section;
 }
 
 function createDownloadButton(
   download: InstallerDownload,
   source: "package" | "fallback" | null,
-): HTMLElement {
+): HTMLAnchorElement {
   const link = document.createElement("a");
   link.className = "btn btn-primary btn-link";
   link.href = download.url;
   link.target = "_blank";
   link.rel = "noopener";
   link.textContent = download.label;
-  link.addEventListener("click", (e) => {
-    e.preventDefault();
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
     if (source) {
       requestNativeHostRetries(source);
     }
     chrome.tabs.create({ url: download.url });
-    setTimeout(() => {
-      link.textContent = "Downloaded? Run it next";
-      link.classList.remove("btn-primary");
-      link.classList.add("btn-secondary");
-    }, 500);
   });
   return link;
 }
@@ -446,9 +532,7 @@ function createDiscoveryRetryButton(): HTMLButtonElement {
   retry.addEventListener("click", () => {
     requestNativeHostRetries("manual");
     retry.disabled = true;
-    retry.textContent = "Retrying\u2026";
-    // A failed retry produces no state change (equivalent failures are
-    // deduped), so no re-render will recreate this button; re-enable it.
+    retry.textContent = "Retrying…";
     setTimeout(() => {
       retry.disabled = false;
       retry.textContent = "Retry discovery";
@@ -457,231 +541,30 @@ function createDiscoveryRetryButton(): HTMLButtonElement {
   return retry;
 }
 
-function createInstallInstructions(
-  platform: Platform,
-  architecture: InstallerArchitecture,
-  filename: string | null,
-): HTMLElement {
-  const wrapper = document.createElement("div");
+function createCodeBlock(command: string): HTMLElement {
+  const codeBlock = document.createElement("div");
+  codeBlock.className = "code-block install-command";
 
-  const body = document.createElement("div");
-  body.className = "install-step-body";
+  const code = document.createElement("code");
+  code.textContent = command;
+  codeBlock.appendChild(code);
 
-  const unsupported =
-    platform === "unknown" || architecture === "unknown";
-  if (unsupported) {
-    body.textContent =
-      "No compatible installer was selected. Review the release notes for supported operating systems and architectures.";
-  } else if (platform === "macos") {
-    body.textContent =
-      "Open the downloaded package and complete the installer. Setup runs automatically when the package finishes.";
-  } else if (platform === "windows") {
-    body.appendChild(document.createTextNode("Find "));
-    const strong = document.createElement("strong");
-    strong.textContent = filename ?? "the downloaded installer";
-    body.appendChild(strong);
-    body.appendChild(
-      document.createTextNode(" in your Downloads folder and double-click it. It installs for your account."),
-    );
-    if (architecture === "arm64") {
-      body.appendChild(
-        document.createTextNode(
-          " Windows runs this signed x64 helper through x64 emulation.",
-        ),
-      );
-    }
-  } else if (platform === "linux" && architecture === "arm64") {
-    body.textContent =
-      "The version-pinned Linux ARM64 installer verifies tailscale-browser-ext-linux-arm64 before installing and registering it:";
-  } else if (platform === "linux") {
-    body.textContent =
-      "Install the package with your system installer, or use one of these commands:";
-  } else {
-    body.textContent = "Open the downloaded file to complete setup.";
-  }
-
-  wrapper.appendChild(body);
-
-  if (!unsupported && platform === "linux" && architecture === "arm64") {
-    appendRepairScriptVerification(wrapper, platform, architecture);
-  } else if (!unsupported && platform === "linux") {
-    wrapper.appendChild(
-      createCodeBlock(
-        "sudo apt install ~/Downloads/tailchrome-helper-linux-amd64.deb",
-      ),
-    );
-    wrapper.appendChild(
-      createCodeBlock(
-        "sudo dnf install ~/Downloads/tailchrome-helper-linux-x86_64.rpm",
-      ),
-    );
-  }
-
-  const hint = document.createElement("div");
-  hint.className = "install-step-hint";
-  if (unsupported) {
-    hint.textContent =
-      "Tailchrome does not guess an installer when runtime platform information is unsupported.";
-  } else if (platform === "macos") {
-    hint.textContent =
-      "If setup needs repair later, open Tailchrome Helper from Applications.";
-  } else if (platform === "linux" && architecture === "arm64") {
-    hint.textContent =
-      "The verified helper installs per-user manifests for Chrome, Chromium, Edge, and Firefox.";
-  } else if (platform === "linux") {
-    hint.textContent =
-      "The package registers system-wide browser manifests for Chrome, Chromium, Edge, and Firefox.";
-  } else {
-    hint.textContent =
-      `The ${platformLabel(platform)} helper registers itself with supported browsers.`;
-  }
-  wrapper.appendChild(hint);
-
-  return wrapper;
-}
-
-function appendRepairScriptVerification(
-  container: HTMLElement,
-  platform: "macos" | "linux",
-  architecture: InstallerArchitecture,
-): void {
-  const checksum = document.createElement("a");
-  checksum.className = "btn btn-secondary btn-link";
-  checksum.href = releaseAssetURL("SHA256SUMS.txt");
-  checksum.target = "_blank";
-  checksum.rel = "noopener";
-  checksum.textContent = "Download release checksums";
-  checksum.addEventListener("click", (e) => {
-    e.preventDefault();
-    chrome.tabs.create({ url: checksum.href });
-  });
-  container.appendChild(checksum);
-
-  const checksumTool =
-    platform === "macos"
-      ? "shasum -a 256 --check"
-      : "sha256sum --check";
-  container.appendChild(
-    createCodeBlock(
-      `cd ~/Downloads && grep -E '^[0-9a-f]{64}  tailchrome-install\\.sh$' SHA256SUMS.txt > tailchrome-install.sh.sha256 && test "$(wc -l < tailchrome-install.sh.sha256)" -eq 1 && ${checksumTool} tailchrome-install.sh.sha256`,
-    ),
-  );
-
-  const provenance = document.createElement("p");
-  provenance.className = "install-step-hint";
-  provenance.textContent =
-    "If GitHub CLI is installed, verify provenance too. Inspect the script before running it.";
-  container.appendChild(provenance);
-  container.appendChild(
-    createCodeBlock(
-      "gh attestation verify ~/Downloads/tailchrome-install.sh --repo dantraynor/tailchrome",
-    ),
-  );
-  container.appendChild(
-    createCodeBlock("less ~/Downloads/tailchrome-install.sh"),
-  );
-
-  const runCmd = repairRunCommand(platform, architecture);
-  if (runCmd) {
-    container.appendChild(createCodeBlock(runCmd));
-  }
-}
-
-function createVerifiedRepairFallback(
-  platform: Platform,
-  architecture: InstallerArchitecture,
-  prominent: boolean,
-  installForUser = false,
-): HTMLElement {
-  const container = document.createElement("div");
-
-  const advancedSection = document.createElement("div");
-  advancedSection.className = prominent
-    ? "install-advanced-section"
-    : "install-advanced-section hidden";
-
-  if (platform === "macos" && prominent) {
-    const heading = document.createElement("strong");
-    heading.textContent = "Open the installed repair app";
-    const explanation = document.createElement("p");
-    explanation.className = "install-step-body";
-    explanation.textContent =
-      "Open Tailchrome Helper where you saved it. For a package install, open /Applications/Tailchrome Helper.app. Then retry discovery.";
-    advancedSection.append(heading, explanation);
-    advancedSection.appendChild(
-      createCodeBlock('open "/Applications/Tailchrome Helper.app"'),
-    );
-    container.appendChild(advancedSection);
-    return container;
-  }
-
-  const advancedToggle = document.createElement("button");
-  advancedToggle.className = "install-advanced-toggle";
-  advancedToggle.type = "button";
-  advancedToggle.textContent = "Show verified per-user repair";
-
-  const download = document.createElement("a");
-  download.className = prominent
-    ? "btn btn-primary btn-link"
-    : "btn btn-secondary btn-link";
-  const filename =
-    platform === "windows"
-      ? "tailchrome-helper-windows-x64.msi"
-      : "tailchrome-install.sh";
-  download.href = releaseAssetURL(filename);
-  download.target = "_blank";
-  download.rel = "noopener";
-  download.textContent =
-    platform === "windows"
-      ? "Download signed installer for repair"
-      : installForUser ? "Download verified per-user installer" : "Download repair installer";
-  download.addEventListener("click", (e) => {
-    e.preventDefault();
+  const copyButton = document.createElement("button");
+  copyButton.type = "button";
+  copyButton.className = "btn btn-ghost code-block-copy";
+  copyButton.textContent = "Copy command";
+  copyButton.setAttribute("aria-label", "Copy install command");
+  copyButton.addEventListener("click", () => {
     requestNativeHostRetries("fallback");
-    chrome.tabs.create({ url: download.href });
+    copyToClipboard(command);
+    showToast("Command copied to clipboard");
+    copyButton.textContent = "Copied";
+    setTimeout(() => {
+      copyButton.textContent = "Copy command";
+    }, 2000);
   });
-
-  const heading = document.createElement("strong");
-  heading.textContent = installForUser
-    ? "Install for this user — no administrator access required"
-    : "Verify, inspect, then run";
-  advancedSection.appendChild(heading);
-  advancedSection.appendChild(download);
-
-  if (platform === "macos" || platform === "linux") {
-    const expectedAsset = binaryFilename(platform, architecture);
-    if (expectedAsset) {
-      const explanation = document.createElement("p");
-      explanation.className = "install-step-body";
-      explanation.textContent =
-        installForUser
-          ? `Verify and inspect the script, then run it to install ${expectedAsset} for your account.`
-          : `The pinned installer downloads and verifies ${expectedAsset}, then restores current-user registration.`;
-      advancedSection.appendChild(explanation);
-    }
-    appendRepairScriptVerification(
-      advancedSection,
-      platform,
-      architecture,
-    );
-  } else {
-    const runCmd = repairRunCommand(platform, architecture);
-    if (runCmd) {
-      advancedSection.appendChild(createCodeBlock(runCmd));
-    }
-  }
-
-  if (!prominent) {
-    advancedToggle.addEventListener("click", () => {
-      const isHidden = advancedSection.classList.toggle("hidden");
-      advancedToggle.textContent = isHidden
-        ? "Show verified per-user repair"
-        : "Hide verified per-user repair";
-    });
-    container.appendChild(advancedToggle);
-  }
-  container.appendChild(advancedSection);
-  return container;
+  codeBlock.appendChild(copyButton);
+  return codeBlock;
 }
 
 function helperFailureDescription(kind: HelperFailureKind | undefined): string {
@@ -695,58 +578,4 @@ function helperFailureDescription(kind: HelperFailureKind | undefined): string {
     default:
       return "Tailscale needs a small helper app to connect your browser to your tailnet.";
   }
-}
-
-/**
- * Creates a numbered step element with label and content containers.
- */
-function createStep(number: string): {
-  root: HTMLElement;
-  content: HTMLElement;
-  label: HTMLElement;
-} {
-  const root = document.createElement("div");
-  root.className = "install-step";
-
-  const badge = document.createElement("div");
-  badge.className = "install-step-number";
-  badge.textContent = number;
-
-  const content = document.createElement("div");
-  content.className = "install-step-content";
-
-  const label = document.createElement("div");
-  label.className = "install-step-label";
-
-  root.appendChild(badge);
-  root.appendChild(content);
-
-  return { root, content, label };
-}
-
-/**
- * Creates a code block with a copy button.
- */
-function createCodeBlock(command: string): HTMLElement {
-  const codeBlock = document.createElement("div");
-  codeBlock.className = "code-block";
-
-  const code = document.createElement("code");
-  code.textContent = command;
-  codeBlock.appendChild(code);
-
-  const copyBtn = document.createElement("button");
-  copyBtn.className = "btn btn-ghost code-block-copy";
-  copyBtn.textContent = "Copy";
-  copyBtn.addEventListener("click", () => {
-    copyToClipboard(command);
-    showToast("Command copied to clipboard");
-    copyBtn.textContent = "Copied!";
-    setTimeout(() => {
-      copyBtn.textContent = "Copy";
-    }, 2000);
-  });
-  codeBlock.appendChild(copyBtn);
-
-  return codeBlock;
 }

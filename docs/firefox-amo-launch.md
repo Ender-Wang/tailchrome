@@ -6,7 +6,7 @@
 - Category: `Privacy & Security, Other`
 - Distribution: `Listed`
 - Platform scope: desktop Firefox only
-- Minimum Firefox version: `140.0`
+- Minimum Firefox version: `142.0`
 - Add-on ID: `tailchrome@tesseras.org`
 
 ## Store URLs

@@ -4,12 +4,14 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 
 	"golang.org/x/term"
+	// Register Taildrop's LocalAPI and PeerAPI handlers in the embedded node.
+	_ "tailscale.com/feature/taildrop"
 	"tailscale.com/hostinfo"
 )
 
@@ -17,20 +19,56 @@ var version = "dev"
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	cmd, err := parseCommand(os.Args[1:])
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	if cmd.Kind == commandHelp {
+		printUsage()
+		return
+	}
+	if cmd.Kind == commandVersion {
+		fmt.Println(version)
+		return
+	}
 	cleanupStaleBinary()
 
-	installFlag := flag.String("install", "", "install native messaging host manifest; value is C<extensionID> for Chrome or F<extensionID> for Firefox")
-	installNowFlag := flag.Bool("install-now", false, "install Chrome and Firefox native messaging manifests for the current user (non-interactive; used by the macOS Helper app)")
-	uninstallFlag := flag.Bool("uninstall", false, "uninstall native messaging host manifest")
-	versionFlag := flag.Bool("version", false, "print version and exit")
-	flag.Parse()
-
-	if *versionFlag {
-		fmt.Println(version)
-		os.Exit(0)
+	if cmd.Kind == commandInstall {
+		if cmd.Opts.ChromeFlatpak {
+			if err := installChromeFlatpak(cmd.Opts.ExtensionDir); err != nil {
+				log.Fatalf("Chrome Flatpak install failed: %v", err)
+			}
+			fmt.Println("Chrome Flatpak native messaging host installed successfully.")
+			return
+		}
+		results, err := installDirectRegistration(cmd.Opts)
+		printRegistrationResults(results)
+		if err != nil {
+			log.Fatalf("install failed: %v", err)
+		}
+		return
 	}
 
-	if *installNowFlag {
+	if cmd.Kind == commandUninstall {
+		if cmd.Opts.ChromeFlatpak {
+			if err := uninstallChromeFlatpak(); err != nil {
+				log.Fatalf("Chrome Flatpak uninstall failed: %v", err)
+			}
+			fmt.Println("Chrome Flatpak native messaging host uninstalled successfully.")
+			return
+		}
+		binaryPath, err := validateInvokingBinaryPath(cmd.Opts.BinaryPath)
+		if err != nil {
+			log.Fatalf("uninstall failed: %v", err)
+		}
+		if err := uninstallOwned(ownerKindDirect, binaryPath, false, cmd.Opts.UserDataDir); err != nil {
+			log.Fatalf("uninstall failed: %v", err)
+		}
+		fmt.Println("Native messaging host uninstalled successfully.")
+		return
+	}
+
+	if cmd.Kind == commandLegacyInstallNow {
 		results, err := installChromiumFamily(chromeWebStoreExtensionID)
 		if err != nil {
 			log.Fatalf("Chromium-family install failed: %v", err)
@@ -40,25 +78,25 @@ func main() {
 		if err := installFirefox(firefoxExtensionID); err != nil {
 			log.Fatalf("Firefox install failed: %v", err)
 		}
-		printBrowserResult(width, "Firefox", true, nil)
+		printBrowserInstallResult(width, BrowserInstallResult{Name: "Firefox", ParentExisted: true, ManifestPath: filepath.Join(firefoxManifestDir(), manifestNameFirefox+".json"), RegistryKeys: platformFirefoxRegistryKeys()})
 		fmt.Println("\nYou can use the Tailchrome extension in your browser.")
-		os.Exit(0)
+		return
 	}
 
-	if *uninstallFlag {
+	if cmd.Kind == commandLegacyUninstall {
 		if err := uninstall(); err != nil {
 			log.Fatalf("uninstall failed: %v", err)
 		}
 		fmt.Println("Native messaging host uninstalled successfully.")
-		os.Exit(0)
+		return
 	}
 
-	if *installFlag != "" {
-		if err := install(*installFlag); err != nil {
+	if cmd.Kind == commandLegacyInstall {
+		if err := install(cmd.Arg); err != nil {
 			log.Fatalf("install failed: %v", err)
 		}
 		fmt.Println("Native messaging host installed successfully.")
-		os.Exit(0)
+		return
 	}
 
 	// If running interactively (user ran the binary in a terminal),
@@ -76,7 +114,7 @@ func main() {
 		if err := installFirefox(firefoxExtensionID); err != nil {
 			log.Fatalf("Firefox install failed: %v", err)
 		}
-		printBrowserResult(width, "Firefox", true, nil)
+		printBrowserInstallResult(width, BrowserInstallResult{Name: "Firefox", ParentExisted: true, ManifestPath: filepath.Join(firefoxManifestDir(), manifestNameFirefox+".json"), RegistryKeys: platformFirefoxRegistryKeys()})
 
 		fmt.Printf("\nYou can now close this terminal and use the Tailchrome extension.\n")
 		os.Exit(0)
@@ -121,6 +159,41 @@ func main() {
 
 	h.readMessages()
 	h.shutdownSession()
+}
+
+func printUsage() {
+	fmt.Println("Tailchrome native messaging host")
+	fmt.Println()
+	fmt.Println("Usage:")
+	fmt.Println("  tailchrome install [--binary-path PATH] [--browser NAME ...] [--all-browsers]")
+	fmt.Println("  tailchrome install --chrome-flatpak [--extension-dir PATH]")
+	fmt.Println("  tailchrome uninstall [--binary-path PATH] [--user-data-dir PATH]")
+	fmt.Println("  tailchrome uninstall --chrome-flatpak")
+	fmt.Println("  tailchrome version")
+	fmt.Println()
+	fmt.Println("Legacy: -install=C<extensionID>, -install-now, -uninstall, -version")
+}
+
+func printRegistrationResults(results []BrowserInstallResult) {
+	width := browserNameColWidth(results)
+	for _, result := range results {
+		printBrowserInstallResult(width, result)
+	}
+}
+
+func printBrowserInstallResult(width int, result BrowserInstallResult) {
+	if result.RolledBack {
+		fmt.Printf("%-*s rolled back.\n", width, result.Name+":")
+		return
+	} else {
+		printBrowserResult(width, result.Name, result.ParentExisted, result.Err)
+	}
+	if result.ManifestPath != "" {
+		fmt.Printf("  manifest: %s\n", result.ManifestPath)
+	}
+	for _, key := range result.RegistryKeys {
+		fmt.Printf("  registry: %s\n", key)
+	}
 }
 
 // sanitizeNativeHostEnvironment removes browser-injected environment values
@@ -185,6 +258,6 @@ func printBrowserResult(width int, name string, parentExisted bool, err error) {
 // the given column width.
 func printChromiumResults(width int, results []BrowserInstallResult) {
 	for _, r := range results {
-		printBrowserResult(width, r.Name, r.ParentExisted, r.Err)
+		printBrowserInstallResult(width, r)
 	}
 }

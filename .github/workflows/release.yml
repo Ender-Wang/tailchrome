@@ -34,12 +34,14 @@ concurrency:
 # run while a signer subject is configured; there is no silent fallback
 # between the two modes.
 #
-# Defender evidence runs only on a controlled, single-use x64 Windows runner
-# carrying a run-specific tailchrome-defender-${run_id} label. Its runner
-# account must be elevated, Defender must support active mode, Microsoft
-# security intelligence and cloud-protection endpoints must be reachable, and
-# the machine must be created from the approved clean image for this one tagged
-# release job, then destroyed. Never bring the runner online until the protected
+# Defender evidence runs on a controlled, single-use x64 Windows runner
+# carrying a run-specific tailchrome-defender-${run_id} label. That runner
+# file-scans the exact x64 and ARM64 raw EXEs plus the x64 MSI; native ARM64
+# runtime smoke is a separate required gate. Its account must be elevated,
+# Defender must support active mode, Microsoft security intelligence and
+# cloud-protection endpoints must be reachable, and the machine must be
+# created from the approved clean image for this one tagged release job, then
+# destroyed. Never bring the runner online until the protected
 # windows-defender-validation deployment has been reviewed.
 
 jobs:
@@ -117,6 +119,7 @@ jobs:
             dist/tailscale-browser-ext-linux-amd64
             dist/tailscale-browser-ext-linux-arm64
             dist/tailscale-browser-ext-windows-amd64.exe
+            dist/tailscale-browser-ext-windows-arm64.exe
             packages/extension/.output/chrome.zip
             packages/extension/.output/firefox.zip
             packages/extension/.output/firefox-sources.zip
@@ -293,6 +296,43 @@ jobs:
             dist/tailchrome-helper-macos.pkg
             dist/tailchrome-helper-macos-user.zip
 
+  windows-arm64-native-smoke:
+    needs: [build, package-windows]
+    runs-on: windows-11-arm
+    timeout-minutes: 20
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+      EXPECTED_ARM64_SHA256: ${{ needs.package-windows.outputs.arm64_sha256 }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.build.outputs.source_sha }}
+      - name: Download final Windows bundle
+        uses: actions/download-artifact@v6
+        with:
+          name: signed-windows
+          path: signed-windows
+      - name: Execute native ARM64 helper and installer tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & .\packaging\windows\test-arm64-release.ps1 `
+            -HelperPath .\signed-windows\tailscale-browser-ext-windows-arm64.exe `
+            -InstallerTestPath .\scripts\install.test.ps1 `
+            -ExpectedVersion "$env:RELEASE_TAG" `
+            -ExpectedSha256 "$env:EXPECTED_ARM64_SHA256" `
+            -ReleaseTag "$env:RELEASE_TAG" `
+            -SourceSha "$env:SOURCE_SHA" `
+            -EvidencePath .\windows-arm64-smoke.json
+      - name: Upload native ARM64 smoke evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-arm64-smoke
+          retention-days: 7
+          if-no-files-found: error
+          path: windows-arm64-smoke.json
+
   package-linux:
     needs: build
     runs-on: ubuntu-latest
@@ -403,6 +443,7 @@ jobs:
       artifact_id: ${{ steps.upload-windows.outputs.artifact-id }}
       artifact_digest: ${{ steps.upload-windows.outputs.artifact-digest }}
       raw_sha256: ${{ steps.windows-hashes.outputs.raw_sha256 }}
+      arm64_sha256: ${{ steps.windows-hashes.outputs.arm64_sha256 }}
       msi_sha256: ${{ steps.windows-hashes.outputs.msi_sha256 }}
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
@@ -440,10 +481,10 @@ jobs:
       - name: Install WiX
         run: dotnet tool install --global wix --version 6.0.2
       # Provider integration gate (signed mode): the selected provider must
-      # place the timestamped raw EXE in signed-windows before MSI
+      # place timestamped amd64 and ARM64 raw EXEs in signed-windows before MSI
       # construction, then sign the unsigned MSI to the final filename before
-      # verification. Unsigned mode stages the reviewed raw EXE directly and
-      # builds the MSI without any signature validation.
+      # verification. Unsigned mode stages both reviewed raw EXEs directly and
+      # builds the x64-only MSI without any signature validation.
       - name: Stage unsigned helper
         if: vars.WINDOWS_ALLOW_UNSIGNED_RELEASE == 'true'
         shell: pwsh
@@ -452,6 +493,9 @@ jobs:
           Copy-Item `
             -LiteralPath .\dist\tailscale-browser-ext-windows-amd64.exe `
             -Destination .\signed-windows\tailscale-browser-ext-windows-amd64.exe
+          Copy-Item `
+            -LiteralPath .\dist\tailscale-browser-ext-windows-arm64.exe `
+            -Destination .\signed-windows\tailscale-browser-ext-windows-arm64.exe
       - name: Build Windows MSI from the signed helper
         if: vars.WINDOWS_ALLOW_UNSIGNED_RELEASE != 'true'
         shell: pwsh
@@ -466,6 +510,14 @@ jobs:
             -OutPath .\signed-windows\tailchrome-helper-windows-x64.unsigned.msi `
             -ExpectedSignerSubject "$env:WINDOWS_EXPECTED_SIGNER_SUBJECT" `
             -SignToolPath "$env:WINDOWS_SIGNTOOL_PATH"
+      - name: Require provider-signed ARM64 helper
+        if: vars.WINDOWS_ALLOW_UNSIGNED_RELEASE != 'true'
+        shell: pwsh
+        run: |
+          $signedArm64 = ".\signed-windows\tailscale-browser-ext-windows-arm64.exe"
+          if (-not (Test-Path -LiteralPath $signedArm64 -PathType Leaf)) {
+            throw "The selected signing provider must produce the timestamped ARM64 raw EXE before candidate assembly."
+          }
       - name: Build Windows MSI from the unsigned helper
         if: vars.WINDOWS_ALLOW_UNSIGNED_RELEASE == 'true'
         shell: pwsh
@@ -484,6 +536,7 @@ jobs:
           }
           .\scripts\verify-windows-signatures.ps1 `
             -RawExe .\signed-windows\tailscale-browser-ext-windows-amd64.exe `
+            -RawArm64Exe .\signed-windows\tailscale-browser-ext-windows-arm64.exe `
             -Msi .\signed-windows\tailchrome-helper-windows-x64.msi `
             -ExpectedSignerSubject "$env:WINDOWS_EXPECTED_SIGNER_SUBJECT" `
             -SignToolPath "$env:WINDOWS_SIGNTOOL_PATH" `
@@ -497,6 +550,11 @@ jobs:
               -LiteralPath .\signed-windows\tailscale-browser-ext-windows-amd64.exe `
               -Algorithm SHA256
           ).Hash.ToLowerInvariant()
+          $arm64Hash = (
+            Get-FileHash `
+              -LiteralPath .\signed-windows\tailscale-browser-ext-windows-arm64.exe `
+              -Algorithm SHA256
+          ).Hash.ToLowerInvariant()
           $msiHash = (
             Get-FileHash `
               -LiteralPath .\signed-windows\tailchrome-helper-windows-x64.msi `
@@ -506,6 +564,7 @@ jobs:
             schemaVersion = 1
             mode          = "unsigned"
             rawExe        = @{ sha256 = $rawHash }
+            arm64Exe      = @{ sha256 = $arm64Hash }
             msi           = @{ sha256 = $msiHash }
           } | ConvertTo-Json |
             Out-File `
@@ -520,12 +579,18 @@ jobs:
               -LiteralPath .\signed-windows\tailscale-browser-ext-windows-amd64.exe `
               -Algorithm SHA256
           ).Hash.ToLowerInvariant()
+          $arm64Hash = (
+            Get-FileHash `
+              -LiteralPath .\signed-windows\tailscale-browser-ext-windows-arm64.exe `
+              -Algorithm SHA256
+          ).Hash.ToLowerInvariant()
           $msiHash = (
             Get-FileHash `
               -LiteralPath .\signed-windows\tailchrome-helper-windows-x64.msi `
               -Algorithm SHA256
           ).Hash.ToLowerInvariant()
           "raw_sha256=$rawHash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "arm64_sha256=$arm64Hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "msi_sha256=$msiHash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
       - name: Upload final Windows bundle
         id: upload-windows
@@ -536,6 +601,7 @@ jobs:
           if-no-files-found: error
           path: |
             signed-windows/tailscale-browser-ext-windows-amd64.exe
+            signed-windows/tailscale-browser-ext-windows-arm64.exe
             signed-windows/tailchrome-helper-windows-x64.msi
             signed-windows/windows-signature-verification.json
 
@@ -554,6 +620,7 @@ jobs:
       PACKAGE_ARTIFACT_ID: ${{ needs.package-windows.outputs.artifact_id }}
       EXPECTED_MSI_SHA256: ${{ needs.package-windows.outputs.msi_sha256 }}
       EXPECTED_RAW_SHA256: ${{ needs.package-windows.outputs.raw_sha256 }}
+      EXPECTED_ARM64_SHA256: ${{ needs.package-windows.outputs.arm64_sha256 }}
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
       SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
     steps:
@@ -598,6 +665,7 @@ jobs:
           if ($env:PACKAGE_ARTIFACT_ID -notmatch '^[1-9][0-9]*$' -or
               $env:PACKAGE_ARTIFACT_DIGEST -notmatch '^[0-9a-f]{64}$' -or
               $env:EXPECTED_RAW_SHA256 -notmatch '^[0-9a-f]{64}$' -or
+              $env:EXPECTED_ARM64_SHA256 -notmatch '^[0-9a-f]{64}$' -or
               $env:EXPECTED_MSI_SHA256 -notmatch '^[0-9a-f]{64}$') {
             throw "The signed Windows artifact provenance is incomplete."
           }
@@ -676,6 +744,11 @@ jobs:
               sha256 = $env:EXPECTED_RAW_SHA256
             },
             [ordered]@{
+              name = "tailscale-browser-ext-windows-arm64.exe"
+              path = Join-Path $bundleRoot "tailscale-browser-ext-windows-arm64.exe"
+              sha256 = $env:EXPECTED_ARM64_SHA256
+            },
+            [ordered]@{
               name = "tailchrome-helper-windows-x64.msi"
               path = Join-Path $bundleRoot "tailchrome-helper-windows-x64.msi"
               sha256 = $env:EXPECTED_MSI_SHA256
@@ -693,6 +766,7 @@ jobs:
             $expectedAllowlist = @(
               "tailchrome-helper-windows-x64.msi"
               "tailscale-browser-ext-windows-amd64.exe"
+              "tailscale-browser-ext-windows-arm64.exe"
               "windows-signature-verification.json"
             )
             $actualAllowlist = @(
@@ -713,6 +787,7 @@ jobs:
                 ConvertFrom-Json -ErrorAction Stop
             )
             if ([string]$signatureSummary.rawExe.sha256 -cne $env:EXPECTED_RAW_SHA256 -or
+                [string]$signatureSummary.arm64Exe.sha256 -cne $env:EXPECTED_ARM64_SHA256 -or
                 [string]$signatureSummary.msi.sha256 -cne $env:EXPECTED_MSI_SHA256) {
               throw "The signed Windows artifact hashes do not match their package outputs."
             }
@@ -1198,7 +1273,7 @@ jobs:
 
   assemble-release-candidate:
     needs:
-      [build, sign-macos, package-macos, package-linux, package-windows, scan-windows-defender]
+      [build, sign-macos, package-macos, package-linux, package-windows, scan-windows-defender, windows-arm64-native-smoke]
     # scan-windows-defender is skipped (not failed) in unsigned mode; every
     # other upstream job must still succeed.
     if: >-
@@ -1208,6 +1283,7 @@ jobs:
           needs.package-macos.result == 'success' &&
           needs.package-linux.result == 'success' &&
           needs.package-windows.result == 'success' &&
+          needs.windows-arm64-native-smoke.result == 'success' &&
           (needs.scan-windows-defender.result == 'success' ||
            (vars.WINDOWS_ALLOW_UNSIGNED_RELEASE == 'true' &&
             needs.scan-windows-defender.result == 'skipped')) }}
@@ -1219,6 +1295,7 @@ jobs:
     env:
       EXPECTED_MSI_SHA256: ${{ needs.package-windows.outputs.msi_sha256 }}
       EXPECTED_RAW_SHA256: ${{ needs.package-windows.outputs.raw_sha256 }}
+      EXPECTED_ARM64_SHA256: ${{ needs.package-windows.outputs.arm64_sha256 }}
       PACKAGE_ARTIFACT_DIGEST: ${{ needs.package-windows.outputs.artifact_digest }}
       PACKAGE_ARTIFACT_ID: ${{ needs.package-windows.outputs.artifact_id }}
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
@@ -1262,6 +1339,11 @@ jobs:
         with:
           name: windows-defender-evidence
           path: windows-defender-evidence
+      - name: Download native ARM64 smoke evidence
+        uses: actions/download-artifact@v6
+        with:
+          name: windows-arm64-smoke
+          path: windows-arm64-smoke
       - name: Collect and allowlist final assets
         run: |
           set -euo pipefail
@@ -1280,12 +1362,31 @@ jobs:
           cp linux-packages/tailchrome-helper-linux-amd64.deb candidate/release/
           cp linux-packages/tailchrome-helper-linux-x86_64.rpm candidate/release/
           cp signed-windows/tailscale-browser-ext-windows-amd64.exe candidate/release/
+          cp signed-windows/tailscale-browser-ext-windows-arm64.exe candidate/release/
           cp signed-windows/tailchrome-helper-windows-x64.msi candidate/release/
           install -m 0755 scripts/install.sh candidate/release/tailchrome-install.sh
+          install -m 0644 scripts/install.ps1 candidate/release/tailchrome-install.ps1
           cp signed-windows/windows-signature-verification.json candidate/evidence/
+          cp windows-arm64-smoke/windows-arm64-smoke.json candidate/evidence/
 
+          arm64_smoke_summary="candidate/evidence/windows-arm64-smoke.json"
+          test "$(jq -r .schemaVersion "$arm64_smoke_summary")" = "1"
+          test "$(jq -r .result "$arm64_smoke_summary")" = "clean"
+          test "$(jq -r .runnerLabel "$arm64_smoke_summary")" = "windows-11-arm"
+          test "$(jq -r .runnerOS "$arm64_smoke_summary")" = "Windows"
+          test "$(jq -r .runnerArchitecture "$arm64_smoke_summary")" = "ARM64"
+          test "$(jq -r .processorArchitecture "$arm64_smoke_summary")" = "ARM64"
+          test "$(jq -r .sourceSha "$arm64_smoke_summary")" = "$SOURCE_SHA"
+          test "$(jq -r .releaseTag "$arm64_smoke_summary")" = "$RELEASE_TAG"
+          test "$(jq -r .helperVersion "$arm64_smoke_summary")" = "$RELEASE_TAG"
+          test "$(jq -r .installerTests "$arm64_smoke_summary")" = "passed"
+          test "$(jq -r .nativeMessagingHandshake "$arm64_smoke_summary")" = "passed"
+          test "$(jq -r '.installerShells | join(",")' "$arm64_smoke_summary")" = "powershell.exe-5.1-native-arm64,powershell.exe-5.1-emulated-shell"
+          test "$(jq -r .rawExe.name "$arm64_smoke_summary")" = "tailscale-browser-ext-windows-arm64.exe"
+          test "$(jq -r .rawExe.sha256 "$arm64_smoke_summary")" = "$EXPECTED_ARM64_SHA256"
+
+          signature_summary="candidate/evidence/windows-signature-verification.json"
           if [ "$WINDOWS_ALLOW_UNSIGNED_RELEASE" = "true" ]; then
-            signature_summary="candidate/evidence/windows-signature-verification.json"
             test "$(jq -r .mode "$signature_summary")" = "unsigned"
           else
             cp windows-defender-evidence/windows-defender-verification.json candidate/evidence/
@@ -1306,10 +1407,18 @@ jobs:
               .observedControlledImageId == .controlledImageId
             ' "$defender_summary" >/dev/null
           fi
+          test "$(jq -r .arm64Exe.sha256 "$signature_summary")" = "$EXPECTED_ARM64_SHA256"
+          if [ "$WINDOWS_ALLOW_UNSIGNED_RELEASE" != "true" ]; then
+            test "$(jq -r '.files[] | select(.name == "tailscale-browser-ext-windows-arm64.exe") | .sha256' "$defender_summary")" = "$EXPECTED_ARM64_SHA256"
+          fi
           test "$(
             sha256sum signed-windows/tailscale-browser-ext-windows-amd64.exe |
               cut -d' ' -f1
           )" = "$EXPECTED_RAW_SHA256"
+          test "$(
+            sha256sum signed-windows/tailscale-browser-ext-windows-arm64.exe |
+              cut -d' ' -f1
+          )" = "$EXPECTED_ARM64_SHA256"
           test "$(
             sha256sum signed-windows/tailchrome-helper-windows-x64.msi |
               cut -d' ' -f1
@@ -1324,12 +1433,14 @@ jobs:
           tailchrome-helper-macos-user.zip
           tailchrome-helper-macos.pkg
           tailchrome-helper-windows-x64.msi
+          tailchrome-install.ps1
           tailchrome-install.sh
           tailscale-browser-ext-darwin-amd64
           tailscale-browser-ext-darwin-arm64
           tailscale-browser-ext-linux-amd64
           tailscale-browser-ext-linux-arm64
           tailscale-browser-ext-windows-amd64.exe
+          tailscale-browser-ext-windows-arm64.exe
           ASSETS
           sed -i 's/^          //' candidate/expected-assets.txt
           find candidate/release -mindepth 1 -maxdepth 1 -type f -printf '%f\n' |
@@ -1339,10 +1450,12 @@ jobs:
             sort > candidate/actual-evidence.txt
           if [ "$WINDOWS_ALLOW_UNSIGNED_RELEASE" = "true" ]; then
             printf '%s\n' \
+              windows-arm64-smoke.json \
               windows-signature-verification.json \
               > candidate/expected-evidence.txt
           else
             printf '%s\n' \
+              windows-arm64-smoke.json \
               windows-defender-verification.json \
               windows-signature-verification.json \
               > candidate/expected-evidence.txt
@@ -1375,6 +1488,10 @@ jobs:
                 cut -d' ' -f1
             )"
           fi
+          arm64_smoke_evidence_sha256="$(
+            sha256sum candidate/evidence/windows-arm64-smoke.json |
+              cut -d' ' -f1
+          )"
           echo "sha256sums_digest=$digest" >> "$GITHUB_OUTPUT"
           jq -n \
             --arg repository "$GITHUB_REPOSITORY" \
@@ -1388,7 +1505,9 @@ jobs:
             --arg windows_package_artifact_id "$PACKAGE_ARTIFACT_ID" \
             --arg windows_package_artifact_digest "$PACKAGE_ARTIFACT_DIGEST" \
             --arg windows_raw_sha256 "$EXPECTED_RAW_SHA256" \
+            --arg windows_arm64_sha256 "$EXPECTED_ARM64_SHA256" \
             --arg windows_msi_sha256 "$EXPECTED_MSI_SHA256" \
+            --arg windows_arm64_smoke_evidence_sha256 "$arm64_smoke_evidence_sha256" \
             --arg windows_defender_image_id "$defender_image_id" \
             --arg windows_defender_evidence_sha256 "$defender_evidence_sha256" \
             '{
@@ -1404,7 +1523,9 @@ jobs:
               windowsPackageArtifactId: $windows_package_artifact_id,
               windowsPackageArtifactDigest: $windows_package_artifact_digest,
               windowsRawSha256: $windows_raw_sha256,
+              windowsArm64Sha256: $windows_arm64_sha256,
               windowsMsiSha256: $windows_msi_sha256,
+              windowsArm64SmokeEvidenceSha256: $windows_arm64_smoke_evidence_sha256,
               windowsDefenderImageId: $windows_defender_image_id,
               windowsDefenderEvidenceSha256: $windows_defender_evidence_sha256
             }' > candidate/candidate-metadata.json

@@ -1,126 +1,96 @@
 # Homebrew installation
 
-This repository is also a Homebrew tap. The macOS cask uses the signed,
-notarized universal `.pkg`. The formula builds the helper from a checksummed
-release source archive on macOS and Linux, with Go as a build dependency.
-Both pin a release version and SHA-256 checksum.
-
-Install [Homebrew](https://brew.sh/) and add the tap:
+This repository is a Homebrew tap. The macOS cask uses a signed, notarized
+universal package. The formula builds from a checksummed source archive on
+macOS and Linux, with Go as a build dependency. Both remain pinned to the
+latest published release; development version bumps do not update the tap.
 
 ```bash
 brew tap dantraynor/tailchrome https://github.com/dantraynor/tailchrome
 ```
 
-The explicit URL is required because this repository is named `tailchrome`,
-rather than `homebrew-tailchrome`. This is a project tap, not an entry in
-Homebrew's core or cask repositories. Install the browser extension separately
-from the [Chrome Web Store](https://chromewebstore.google.com/detail/tailchrome/bhfeceecialgilpedkoflminjgcjljll)
+Install the browser extension separately from the
+[Chrome Web Store](https://chromewebstore.google.com/detail/tailchrome/bhfeceecialgilpedkoflminjgcjljll)
 or [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/tailchrome/).
 
-## macOS
+## macOS cask
 
 ```bash
 brew install --cask dantraynor/tailchrome/tailchrome
 ```
 
-The package requires an administrator password and supports both Apple Silicon
-and Intel Macs. It installs `/Applications/Tailchrome Helper.app` and the helper
-at `/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext`.
-The package registers a per-user runtime copy for the logged-in console user.
-Restart your browser after installation.
+The package requires administrator access and supports Intel and Apple Silicon.
+It installs `/Applications/Tailchrome Helper.app` and the helper at
+`/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext`.
+Open that app in each account to register or repair discovery. Starting with
+v0.1.14, registration points directly at the system package payload. Older
+releases create a separate per-user runtime copy.
 
-To repair discovery or register another macOS user, open **Tailchrome Helper**
-in that account, or run:
-
-```bash
-"/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext" -install-now
-```
-
-Before upgrading, disconnect Tailchrome and close your browsers:
+Disconnect Tailchrome and close browsers before upgrading:
 
 ```bash
 brew update
 brew upgrade --cask dantraynor/tailchrome/tailchrome
 ```
 
-Reopen your browsers when the upgrade finishes. Other macOS accounts that use
-Tailchrome should run the repair command above to refresh their runtime copy.
-
-To uninstall, disconnect Tailchrome and close your browsers, then run:
+Reopen the helper app in other registered accounts after upgrading an older
+release. To remove the package:
 
 ```bash
 brew uninstall --cask dantraynor/tailchrome/tailchrome
 ```
 
-The cask invokes the helper's `-uninstall` command as the current user before
-removing the package payload and receipt (`org.tesseras.tailchrome.helper`).
-If other accounts used Tailchrome, run the following once in each account
-**before** uninstalling the cask:
-
-```bash
-"/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext" -uninstall
-```
+The cask chooses the uninstall command supported by its pinned helper. Other
+accounts should run the command printed by `brew info --cask tailchrome`
+before the package is removed. Node identities are preserved.
 
 ## Source formula (macOS and Linux)
 
-The formula builds the native helper locally for your architecture. It does
-not install the macOS package or **Tailchrome Helper.app**; register the helper
-with the command below. Go is needed only to build the helper.
-
 ```bash
 brew install --formula dantraynor/tailchrome/tailchrome
+brew info --formula dantraynor/tailchrome/tailchrome
+```
+
+Run the registration command shown in the caveats without `sudo`. For v0.1.14
+and later, this registers Homebrew's stable opt path:
+
+```bash
+helper="$(brew --prefix tailchrome)/bin/tailscale-browser-ext"
+"$helper" install --binary-path "$helper"
+```
+
+The formula also provides the `tailchrome` command alias. Use the explicit
+opt path for registration so normal `brew upgrade` and `brew cleanup` continue
+to work without refreshing a separate runtime copy. The same registration
+command repairs discovery.
+
+The currently pinned v0.1.13 helper uses the legacy command instead:
+
+```bash
 tailscale-browser-ext -install-now
 ```
 
-Run registration without `sudo`. The helper registers Chrome, Firefox, and
-the other supported Chromium-family browsers for your current user. Homebrew
-owns the built helper in its prefix; the registration command owns a separate
-runtime copy and your native-messaging manifests. The runtime copy lives at:
+That older command copies a runtime to
+`~/Library/Application Support/Tailscale/BrowserExt/` on macOS or
+`~/.local/share/tailscale/browser-ext/` on Linux. Repeat it after upgrading an
+older formula. Follow the installed formula's caveats when the tap is updated.
 
-- macOS: `~/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext`
-- Linux: `~/.local/share/tailscale/browser-ext/tailscale-browser-ext`
-
-After **every** upgrade, disconnect Tailchrome and close your browsers before
-refreshing that runtime copy:
+To remove a v0.1.14 or later formula, unregister in each account first:
 
 ```bash
-brew update
-brew upgrade --formula dantraynor/tailchrome/tailchrome
-tailscale-browser-ext -install-now
-```
-
-Reopen your browser after registration finishes. The same registration command
-repairs discovery. Run it in each account that uses Tailchrome. If the executable
-is not on `PATH`, use `"$(brew --prefix tailchrome)/bin/tailscale-browser-ext"`.
-
-Before removing the formula, disconnect Tailchrome and close your browsers,
-then run:
-
-```bash
-tailscale-browser-ext -uninstall
+helper="$(brew --prefix tailchrome)/bin/tailscale-browser-ext"
+"$helper" uninstall --binary-path "$helper"
 brew uninstall --formula dantraynor/tailchrome/tailchrome
 ```
 
-Run `-uninstall` in each registered user account before removing the formula.
-If you already removed it, run the runtime copy's `-uninstall` command using
-the path for your platform:
+For older helpers, use `tailscale-browser-ext -uninstall` before `brew uninstall`.
+Older uninstallers do not understand ownership receipts: remove old packages
+before switching installation methods, or rerun the new method's registration
+afterward. Native node identities are preserved. See
+[helper installation](../../docs/helper-installation.md).
 
-```bash
-# macOS
-"$HOME/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext" -uninstall
-# Linux
-"$HOME/.local/share/tailscale/browser-ext/tailscale-browser-ext" -uninstall
-```
-
-Neither platform's uninstall deletes Tailscale identities or profile data.
-Use one helper installation method at a time; per-user registrations can take
-precedence over package registrations. When switching from another installer,
-disconnect Tailchrome, close browsers, follow that installer's uninstall steps,
-then install and register with Homebrew.
-
-Homebrew does not install a native Windows helper. Use the
-[Windows MSI](../windows/README.md) for browsers running on Windows, including
-when Homebrew is available inside WSL.
+Homebrew in WSL does not install a Windows helper. Use the
+[Windows installer](../windows/README.md) for browsers running on Windows.
 
 ## Maintaining the tap
 

@@ -12,7 +12,7 @@ fi
 
 chmod a+x "$BIN" 2>/dev/null || true
 
-if ! "$BIN" -install-now; then
+if ! "$BIN" install --binary-path "$BIN"; then
   osascript <<'OSA' || true
 display dialog "The helper could not finish setup. If macOS blocked the app, open System Settings → Privacy & Security and allow it, then try again." buttons {"OK"} default button 1 with title "Tailchrome"
 OSA

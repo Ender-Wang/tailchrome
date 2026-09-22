@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ProxyManager, TailscaleState, NativeReply, RoutingHealth } from "../types";
+import { makePeer } from "../__test__/fixtures";
 import {
   getHelperVersionNotice,
   initBackground,
@@ -2291,6 +2292,339 @@ describe("initBackground", () => {
       popupPort.onMessage._listeners[0]!({ type: "new-profile" });
 
       expect(nativePort.postMessage).toHaveBeenCalledWith({ cmd: "new-profile" });
+    });
+
+    it("restores routing when returning from an empty profile to the same saved account", async () => {
+      (chrome.storage.local.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        profileId: "test-id", autoConnectOnStart: true,
+      });
+      await setupBackground();
+      advertiseLoginSupport();
+      sendNativeMessage({ init: {} });
+      const original: NonNullable<NativeReply["status"]> = {
+        backendState: "Running", running: true, needsLogin: false,
+        tailnet: "example.ts.net", magicDNSSuffix: "example.ts.net",
+        selfNode: { ...makePeer(), id: "saved-self", keyExpiry: null },
+        browseToURL: "", exitNode: null, peers: [], health: [], error: null,
+        prefs: { exitNodeID: "", exitNodeAllowLANAccess: false, corpDNS: true, shieldsUp: false },
+      };
+      const savedProfile = { id: "saved", name: "Original account" };
+      sendNativeMessage({ profiles: { current: savedProfile, profiles: [savedProfile] } });
+      sendNativeMessage({ status: original });
+      expect(proxyManager.apply).toHaveBeenLastCalledWith(expect.objectContaining({
+        routingPolicy: expect.objectContaining({ mode: "active" }),
+      }));
+      const popup = createPopupPort();
+      connectListeners[0]!(popup);
+      popup.onMessage._listeners[0]!({ type: "new-profile" });
+      sendNativeMessage({ status: original });
+      expect(proxyManager.apply).toHaveBeenLastCalledWith(expect.objectContaining({
+        routingPolicy: expect.objectContaining({ mode: "blocked", blockAll: true }),
+      }));
+      sendNativeMessage({ profiles: { current: { id: "", name: "" }, profiles: [savedProfile] } });
+      sendNativeMessage({ status: {
+        ...original, backendState: "NeedsLogin", running: false, needsLogin: true,
+        selfNode: null, prefs: null,
+      } });
+      popup.onMessage._listeners[0]!({ type: "switch-profile", profileID: savedProfile.id });
+      expect(proxyManager.apply).toHaveBeenLastCalledWith(expect.objectContaining({
+        routingPolicy: expect.objectContaining({ mode: "blocked", blockAll: true }),
+      }));
+      sendNativeMessage({ profiles: { current: savedProfile, profiles: [savedProfile] } });
+      sendNativeMessage({ status: original });
+      expect(proxyManager.apply).toHaveBeenLastCalledWith(expect.objectContaining({
+        routingPolicy: expect.objectContaining({ mode: "active", selectedExitNodeID: null }),
+      }));
+    });
+
+    it("does not duplicate the initial profile request when Running arrives first", async () => {
+      await setupBackground();
+      sendNativeMessage({ init: {} });
+      expect(nativePort.postMessage).toHaveBeenCalledWith({
+        cmd: "list-profiles",
+      });
+      nativePort.postMessage.mockClear();
+
+      sendNativeMessage({
+        status: {
+          backendState: "Running",
+          running: true,
+          tailnet: null,
+          magicDNSSuffix: "",
+          selfNode: null,
+          needsLogin: false,
+          browseToURL: "",
+          exitNode: null,
+          peers: [],
+          prefs: null,
+          health: [],
+          error: null,
+        },
+      });
+
+      expect(nativePort.postMessage).not.toHaveBeenCalledWith({
+        cmd: "list-profiles",
+      });
+    });
+
+    it("retries the initial profile request after a host error", async () => {
+      await setupBackground();
+      sendNativeMessage({ init: {} });
+      sendNativeMessage({
+        error: { cmd: "list-profiles", message: "temporary failure" },
+      });
+      nativePort.postMessage.mockClear();
+
+      sendNativeMessage({
+        status: {
+          backendState: "Running",
+          running: true,
+          tailnet: null,
+          magicDNSSuffix: "",
+          selfNode: null,
+          needsLogin: false,
+          browseToURL: "",
+          exitNode: null,
+          peers: [],
+          prefs: null,
+          health: [],
+          error: null,
+        },
+      });
+
+      expect(
+        nativePort.postMessage.mock.calls.filter(
+          ([message]) => (message as { cmd?: string }).cmd === "list-profiles",
+        ),
+      ).toHaveLength(1);
+    });
+
+    it("refreshes an empty profile after its login reaches Running", async () => {
+      await setupBackground();
+      const popupPort = createPopupPort();
+      connectListeners[0]!(popupPort);
+      popupPort.onMessage._listeners[0]!({ type: "new-profile" });
+
+      sendNativeMessage({
+        profiles: {
+          current: { id: "", name: "" },
+          profiles: [{ id: "old", name: "Old account" }],
+        },
+      });
+      nativePort.postMessage.mockClear();
+
+      const status = (
+        backendState: TailscaleState["backendState"],
+      ): NonNullable<NativeReply["status"]> => ({
+        backendState,
+        running: backendState === "Running",
+        tailnet: null,
+        magicDNSSuffix: "",
+        selfNode: null,
+        needsLogin: backendState === "NeedsLogin",
+        browseToURL: "",
+        exitNode: null,
+        peers: [],
+        prefs: null,
+        health: [],
+        error: null,
+      });
+      const profileRefreshes = () =>
+        nativePort.postMessage.mock.calls.filter(
+          ([message]) => (message as { cmd?: string }).cmd === "list-profiles",
+        );
+
+      sendNativeMessage({ status: status("NeedsLogin") });
+      expect(profileRefreshes()).toHaveLength(0);
+
+      sendNativeMessage({ status: status("Running") });
+      sendNativeMessage({ status: status("Running") });
+      expect(profileRefreshes()).toHaveLength(1);
+
+      sendNativeMessage({
+        profiles: {
+          current: { id: "new", name: "New account" },
+          profiles: [
+            { id: "old", name: "Old account" },
+            { id: "new", name: "New account" },
+          ],
+        },
+      });
+      nativePort.postMessage.mockClear();
+      sendNativeMessage({ status: status("Running") });
+      expect(profileRefreshes()).toHaveLength(0);
+    });
+
+    describe("profile refresh after reauthentication", () => {
+      const oldProfiles: NonNullable<NativeReply["profiles"]> = {
+        current: { id: "old", name: "Old account" },
+        profiles: [{ id: "old", name: "Old account" }],
+      };
+      const newProfiles: NonNullable<NativeReply["profiles"]> = {
+        current: { id: "new", name: "New account" },
+        profiles: [{ id: "new", name: "New account" }],
+      };
+
+      function status(
+        backendState: TailscaleState["backendState"],
+        controlURL = "",
+      ): NativeReply {
+        return {
+          status: {
+            backendState,
+            running: backendState === "Running",
+            tailnet: null,
+            magicDNSSuffix: "",
+            selfNode: null,
+            needsLogin: backendState === "NeedsLogin",
+            browseToURL: "",
+            exitNode: null,
+            peers: [],
+            prefs: {
+              controlURL,
+              corpDNS: true,
+              exitNodeID: "",
+              exitNodeAllowLANAccess: false,
+              shieldsUp: false,
+              advertiseExitNode: false,
+            },
+            health: [],
+            error: null,
+          },
+        };
+      }
+
+      function profileRefreshes() {
+        return nativePort.postMessage.mock.calls.filter(
+          ([message]) => (message as { cmd?: string }).cmd === "list-profiles",
+        );
+      }
+
+      beforeEach(async () => {
+        await setupBackground();
+        advertiseCustomControlURLSupport();
+        sendNativeMessage({ profiles: oldProfiles });
+        sendNativeMessage(status("Running"));
+        nativePort.postMessage.mockClear();
+      });
+
+      it.each([
+        "logout",
+        "requested control-server change",
+        "confirmed control-server change",
+        "NeedsLogin",
+      ])("refreshes a populated profile after %s", (transition) => {
+        const popupPort = createPopupPort();
+        connectListeners[0]!(popupPort);
+        let controlURL = "";
+        if (transition === "logout") {
+          popupPort.onMessage._listeners[0]!({ type: "logout" });
+        } else if (transition === "requested control-server change") {
+          popupPort.onMessage._listeners[0]!({
+            type: "set-pref",
+            key: "controlURL",
+            value: "https://hs.example.com",
+          });
+        } else if (transition === "confirmed control-server change") {
+          controlURL = "https://hs.example.com";
+        } else {
+          sendNativeMessage(status("NeedsLogin"));
+          // The saved profile may still have its old ID before reauthentication.
+          sendNativeMessage({ profiles: oldProfiles });
+          sendNativeMessage(status("Starting"));
+        }
+        expect(profileRefreshes()).toHaveLength(0);
+
+        sendNativeMessage(status("Running", controlURL));
+        sendNativeMessage(status("Running", controlURL));
+        expect(profileRefreshes()).toHaveLength(1);
+
+        sendNativeMessage({ profiles: newProfiles });
+        expect(popupPort.postMessage).toHaveBeenLastCalledWith({
+          type: "state",
+          state: expect.objectContaining({
+            currentProfile: newProfiles.current,
+            profiles: newProfiles.profiles,
+          }),
+        });
+        sendNativeMessage(status("Running", controlURL));
+        expect(profileRefreshes()).toHaveLength(1);
+      });
+
+      it.each([oldProfiles, { ...oldProfiles, current: { id: "", name: "" } }])(
+        "refreshes after a pre-login request returns late: %j",
+        (staleProfiles) => {
+          sendNativeMessage({ init: {} });
+          expect(profileRefreshes()).toHaveLength(1);
+
+          sendNativeMessage(status("NeedsLogin"));
+          sendNativeMessage(status("Running"));
+          expect(profileRefreshes()).toHaveLength(1);
+
+          sendNativeMessage({ profiles: staleProfiles });
+          expect(profileRefreshes()).toHaveLength(2);
+          sendNativeMessage({ profiles: newProfiles });
+          sendNativeMessage(status("Running"));
+          expect(profileRefreshes()).toHaveLength(2);
+        },
+      );
+
+      it("keeps the refresh pending when the initial request is sent during login", () => {
+        sendNativeMessage(status("NeedsLogin"));
+        sendNativeMessage({ init: {} });
+        sendNativeMessage(status("Running"));
+        expect(profileRefreshes()).toHaveLength(1);
+
+        sendNativeMessage({ profiles: oldProfiles });
+        expect(profileRefreshes()).toHaveLength(2);
+        sendNativeMessage({ profiles: newProfiles });
+        sendNativeMessage(status("Running"));
+        expect(profileRefreshes()).toHaveLength(2);
+      });
+
+      it("retries a failed refresh while Running without another status", async () => {
+        sendNativeMessage(status("NeedsLogin"));
+        sendNativeMessage(status("Running"));
+        expect(profileRefreshes()).toHaveLength(1);
+
+        sendNativeMessage({
+          error: { cmd: "list-profiles", message: "temporary failure" },
+        });
+        await vi.advanceTimersByTimeAsync(999);
+        expect(profileRefreshes()).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(profileRefreshes()).toHaveLength(2);
+        sendNativeMessage({ profiles: newProfiles });
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(profileRefreshes()).toHaveLength(2);
+      });
+
+      it("bounds repeated profile refresh retries", async () => {
+        sendNativeMessage(status("NeedsLogin"));
+        sendNativeMessage(status("Running"));
+        expect(profileRefreshes()).toHaveLength(1);
+
+        for (const [index, delayMs] of [1_000, 3_000, 10_000].entries()) {
+          sendNativeMessage({
+            error: { cmd: "list-profiles", message: "temporary failure" },
+          });
+          await vi.advanceTimersByTimeAsync(delayMs);
+          expect(profileRefreshes()).toHaveLength(index + 2);
+        }
+
+        sendNativeMessage({
+          error: { cmd: "list-profiles", message: "temporary failure" },
+        });
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(profileRefreshes()).toHaveLength(4);
+      });
+
+      it("does not refresh profiles when reconnecting the same account", () => {
+        sendNativeMessage(status("Stopped"));
+        sendNativeMessage(status("Starting"));
+        sendNativeMessage(status("Running"));
+        expect(profileRefreshes()).toHaveLength(0);
+      });
     });
 
     it("handles delete-profile message", async () => {

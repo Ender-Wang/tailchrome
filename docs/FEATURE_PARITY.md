@@ -2,7 +2,7 @@
 
 > Comparison of the Tailchrome browser extension against the native Tailscale desktop/mobile clients (macOS, Windows, Linux, iOS, Android).
 
-Last updated: 2026-09-07
+Last updated: 2026-09-21
 
 ---
 
@@ -140,7 +140,7 @@ Last updated: 2026-09-07
 | Ping peers (`tailscale ping`)              | Yes           | Yes        | Online peers expose a Ping action when the helper advertises support; results appear as a diagnostic toast. |
 | Helper diagnostic report                   | Yes           | Partial    | User-initiated local copy/export covers helper activation state and sanitized errors; it excludes browsing, authentication, tailnet, peer, profile, and traffic data. |
 | Debug logging                              | Yes           | Partial    | Native host logs to stderr (visible when launched from terminal); extension logs to browser devtools console |
-| Version display                            | Yes           | Yes        | The connected footer shows the native helper version. A different release produces a non-blocking notice; advertised capability flags gate individual controls. |
+| Version display                            | Yes           | Yes        | The connected footer shows the native helper version. A version difference alone produces a non-blocking notice; authenticated-proxy support is required, and advertised capability flags gate optional controls. Update the helper and extension together from v0.1.13 or earlier. |
 
 
 ---
@@ -156,7 +156,7 @@ Last updated: 2026-09-07
 | Keyboard navigation    | Yes           | Yes        | Arrow keys in peer list                                                                                                                            |
 | Search                 | Yes           | Yes        | Peer search in popup                                                                                                                               |
 | Auto-update            | Yes           | Partial    | The extension updates through its browser store. The helper has no self-updater; an older helper notice links to the exact companion release or repair guidance. |
-| Cross-platform         | Yes           | Yes        | Extension: Chrome + Firefox. Host: macOS (amd64/arm64), Linux raw helper (amd64/arm64), Linux packages (amd64/x86_64), and Windows (amd64; x64 installer). |
+| Cross-platform         | Yes           | Yes        | Extension: Chrome + Firefox. Host: macOS (amd64/arm64), Linux raw helper (amd64/arm64), Linux packages (amd64/x86_64), and Windows raw helpers (amd64/ARM64), with an x64 MSI and a PowerShell installer that selects the native architecture, including ARM64. |
 
 
 ---

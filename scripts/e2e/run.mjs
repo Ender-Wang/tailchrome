@@ -10,7 +10,7 @@
  *   HEADLESS=false pnpm e2e
  */
 import { execSync, spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { launch } from "./launch.mjs";
@@ -148,6 +148,12 @@ async function runCase({ browserName, extensionDir, item }) {
   } catch (err) {
     failed = true;
     const requests = nativeHost.readRequests();
+    if (process.env.KEEP_E2E_ARTIFACTS === "true") {
+      writeFileSync(
+        resolve(nativeHost.root, "failure.json"),
+        JSON.stringify({ browser: browserName, case: name, error: err.stack ?? err.message, requests }, null, 2) + "\n",
+      );
+    }
     if (requests.length === 0) {
       console.error(`    Native host saw no requests. Artifacts: ${nativeHost.root}`);
     } else {
@@ -198,15 +204,19 @@ async function main() {
       console.log(`> Testing current branch: ${ref}`);
     }
 
-    console.log(`> pnpm build:${browserName}`);
-    sh(`pnpm build:${browserName}`);
+    const suppliedExtensionDir = process.env.E2E_EXTENSION_DIR;
+    const extensionDir = suppliedExtensionDir
+      ? resolve(repoRoot, suppliedExtensionDir)
+      : resolve(repoRoot, `packages/extension/.output/${browserName}-mv3`);
+    if (suppliedExtensionDir) {
+      console.log(`> Testing prebuilt extension: ${extensionDir}`);
+    } else {
+      console.log(`> pnpm build:${browserName}`);
+      sh(`pnpm build:${browserName}`);
+    }
 
-    const extensionDir = resolve(
-      repoRoot,
-      `packages/extension/.output/${browserName}-mv3`,
-    );
-    if (!existsSync(extensionDir)) {
-      throw new Error(`Built extension not found at ${extensionDir}`);
+    if (!existsSync(extensionDir) || !statSync(extensionDir).isDirectory()) {
+      throw new Error(`Extension directory not found at ${extensionDir}`);
     }
 
     const cases = await loadCases({ browserName, suite, grep });

@@ -48,8 +48,32 @@ The same UI renders in either surface.
 ## Install
 
 1. Get the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/tailchrome/bhfeceecialgilpedkoflminjgcjljll) (also installs in Brave, Edge, Vivaldi, Opera, and — on macOS — Arc) or [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/tailchrome/)
-2. Install the native helper with [Homebrew](#homebrew-macos-and-linux) on macOS/Linux, or from the [latest release](https://github.com/dantraynor/tailchrome/releases/latest) — **`tailchrome-helper-macos-user.zip`** on macOS, **`tailchrome-helper-windows-x64.msi`** on Windows, or the verified **`tailchrome-install.sh`** on Linux. These install for your account without administrator access. System packages are also available on macOS and Linux amd64.
+2. Open the extension and follow its per-user helper setup: the helper app on macOS, the Windows installer or native ARM64 PowerShell installer, or one terminal command on Linux. These install for your account without administrator access. [Homebrew](#homebrew-macos-and-linux) and system packages remain available.
 3. Log in to your Tailscale account
+
+### Terminal installation
+
+The simplified installer and CLI require helper **v0.1.14 or later**. Until that
+release is published, use the installers and instructions attached to the
+[current release](https://github.com/dantraynor/tailchrome/releases/latest).
+
+On macOS or Linux:
+
+```bash
+curl -fsSL https://github.com/dantraynor/tailchrome/releases/latest/download/tailchrome-install.sh | bash
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://github.com/dantraynor/tailchrome/releases/latest/download/tailchrome-install.ps1 | iex
+```
+
+The installer selects and verifies the matching helper, places it at a stable
+user-owned path, and registers it with your browsers. Rerun the same installer
+to upgrade or repair registration. Downloads can also be inspected and pinned
+to a release. See [helper installation](docs/helper-installation.md) for paths,
+custom browser IDs, safe upgrades, removal, and Chrome Flatpak setup.
 
 ### Homebrew (macOS and Linux)
 
@@ -69,9 +93,11 @@ brew install --formula dantraynor/tailchrome/tailchrome
 tailscale-browser-ext -install-now
 ```
 
-The formula installs Go as a build dependency. Formula users must close their
-browsers and repeat `tailscale-browser-ext -install-now` after each `brew upgrade`
-to refresh the per-user runtime copy. See the
+The formula installs Go as a build dependency. Follow `brew info` for the
+registration command supported by the formula's pinned release. Starting with
+v0.1.14, direct registration uses Homebrew's stable `opt` path, so upgrades do
+not require refreshing a separate runtime copy. Older formula releases still
+require repeating `-install-now` after upgrading. See the
 [Homebrew instructions](packaging/homebrew/README.md) for upgrades, repair,
 and removal. The browser extension is installed separately.
 
@@ -82,23 +108,27 @@ contains the helper and registers it for your account. The app and system
 package are signed and notarized. Organization browser policies can still
 block extensions or native messaging.
 
-A Windows installer is release-quality only when the raw helper, embedded
-helper, and outer MSI pass the
-[Windows code-signing policy](docs/WINDOWS_CODE_SIGNING_POLICY.md); older
-releases may predate that gate. Linux packages are covered by the release
+A signed Windows release verifies both raw helpers, the embedded amd64
+helper, and the outer MSI under the
+[Windows code-signing policy](docs/WINDOWS_CODE_SIGNING_POLICY.md). Explicit
+unsigned releases disclose that exception. Linux packages are covered by the release
 checksum and build-provenance attestation. If Tailchrome still cannot discover
 the helper after the package is installed, the popup
 offers a current-user registration repair for the browser that requested it.
-On macOS, `/Applications/Tailchrome Helper.app` provides the same repair entry
-point. The macOS/Linux fallback installer is pinned to one release version,
-checks the downloaded helper before running it, and uses the helper's own
-tested registration targets; see the
+On macOS, reopen `~/Applications/Tailchrome Helper.app` for the per-user app,
+or `/Applications/Tailchrome Helper.app` for the system package. The per-user installer resolves one release version, checks the
+downloaded helper before running it, and uses the helper's own registration
+targets. Explicit version pinning remains available; see the
 [Linux](packaging/linux/README.md) and [macOS](packaging/macos/README.md)
 instructions.
 
-Helper release differences do not disable the connection. Tailchrome keeps
-using the capabilities the installed helper advertises and shows a
-non-blocking release notice when versions differ. Helper diagnostic reports
+Helper version differences alone do not disable the connection: compatible
+helpers show a non-blocking release notice, and optional features use the
+capabilities the helper advertises. **Upgrade the extension and helper together
+for v0.1.14.** Its authenticated proxy is a required capability: the new extension
+rejects older helpers without it, and older extensions cannot authenticate to
+the new helper. Complete both updates before resuming protected browsing.
+Helper diagnostic reports
 are created only when you choose **Copy diagnostic report** or
 **Export diagnostic report**; they remain local until you copy, save, or share
 them.

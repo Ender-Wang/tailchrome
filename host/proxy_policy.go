@@ -338,13 +338,25 @@ func sameProxyPrefs(a, b *ipn.Prefs) bool {
 	return a.WantRunning == b.WantRunning && a.RouteAll == b.RouteAll && a.ExitNodeID == b.ExitNodeID && a.ExitNodeAllowLANAccess == b.ExitNodeAllowLANAccess && a.CorpDNS == b.CorpDNS && a.ControlURL == b.ControlURL
 }
 
-// Profile changes reuse tsnet. Advance the session generation before switching
-// and restart the watcher afterwards so neither cached maps nor in-flight DNS
-// results can authorize connections under another profile.
+// Profile changes reuse tsnet. Advance the session generation and discard
+// profile-scoped caches before switching, then restart the watcher afterwards
+// so no state from the previous profile remains reachable. The caller must
+// defer the returned function to reopen web admission after the mutation.
 func (h *Host) beginProxyProfileChange(lc *local.Client) func() {
+	finishWebChange := h.beginWebSessionChange()
+	return h.beginProxyProfileChangeLocked(lc, finishWebChange)
+}
+
+// beginProxyProfileChangeLocked performs the identity invalidation while the
+// caller owns the web admission transition. Native commands use
+// beginProxyProfileChange; web logout uses this split form from its LocalAPI
+// transport boundary so invalidation happens immediately before the authorized
+// logout mutation, including when that mutation later fails.
+func (h *Host) beginProxyProfileChangeLocked(lc *local.Client, finishWebChange func()) func() {
 	h.sessionMu.Lock()
 	if h.lc != lc {
 		h.sessionMu.Unlock()
+		finishWebChange()
 		return func() {}
 	}
 	oldCancel := h.watchCancel
@@ -353,10 +365,12 @@ func (h *Host) beginProxyProfileChange(lc *local.Client) func() {
 	generation := h.sessionGeneration
 	h.clearCachedStatus(nil)
 	h.sessionMu.Unlock()
+	h.clearWebServer()
 	if oldCancel != nil {
 		oldCancel()
 	}
 	return func() {
+		defer finishWebChange()
 		ctx, cancel := context.WithCancel(context.Background())
 		h.sessionMu.Lock()
 		if h.lc != lc || h.sessionGeneration != generation {

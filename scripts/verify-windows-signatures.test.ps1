@@ -232,6 +232,8 @@ try {
   $SignedExe = Join-Path $TestRoot "tailscale-browser-ext-windows-amd64.exe"
   Copy-Item -LiteralPath $UnsignedExe -Destination $SignedExe
   Invoke-Sign -Path $SignedExe -PfxPath $Primary.PfxPath
+  $SignedArm64Exe = Join-Path $TestRoot "tailscale-browser-ext-windows-arm64.exe"
+  Copy-Item -LiteralPath $SignedExe -Destination $SignedArm64Exe
 
   $UnsignedMsi = Join-Path $TestRoot "tailchrome-helper-windows-x64.unsigned.msi"
   & $BuildMsi `
@@ -253,6 +255,7 @@ try {
   try {
     & $Verifier `
       -RawExe $SignedExe `
+      -RawArm64Exe $SignedArm64Exe `
       -Msi $SignedMsi `
       -ExpectedSignerSubject $TestSubject `
       -ExtractionDirectory ".\$RelativeExtractionDirectory" `
@@ -268,7 +271,9 @@ try {
     throw "A relative signature summary path was not resolved from the PowerShell working directory."
   }
   $Summary = Get-Content -LiteralPath $SummaryPath -Raw | ConvertFrom-Json
-  if (-not $Summary.embeddedMatchesRaw -or $Summary.expectedSignerSubject -cne $TestSubject) {
+  if (-not $Summary.embeddedMatchesRaw -or
+      $Summary.expectedSignerSubject -cne $TestSubject -or
+      $Summary.arm64Exe.sha256 -cne $Summary.rawExe.sha256) {
     throw "Positive signature fixture returned an invalid summary."
   }
 

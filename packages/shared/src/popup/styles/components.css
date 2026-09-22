@@ -913,6 +913,29 @@ button.setting-row {
   white-space: pre-wrap;
 }
 
+/* Installer commands can wrap across several lines. Keep their action in a
+   separate row so it never obscures the command at narrow popup widths. */
+.install-command {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.install-command code {
+  display: block;
+  min-width: 0;
+  padding-right: 0;
+  overflow-wrap: anywhere;
+}
+
+.install-command .code-block-copy {
+  position: static;
+  top: auto;
+  right: auto;
+  align-self: flex-start;
+  flex-shrink: 0;
+}
+
 /* ==============================
    Setting Row Variants
    ============================== */
@@ -1502,6 +1525,129 @@ button.setting-row {
 
 .install-advanced-section.hidden {
   display: none;
+}
+
+/* ==============================
+   Simplified helper setup
+   ============================== */
+
+.install-view {
+  align-items: stretch;
+  justify-content: flex-start;
+  text-align: left;
+  padding-top: var(--space-2xl);
+  padding-bottom: var(--space-2xl);
+}
+
+.install-view > .centered-view-icon,
+.install-view > .centered-view-title,
+.install-view > .centered-view-text {
+  align-self: center;
+  text-align: center;
+}
+
+.helper-install-primary {
+  width: 100%;
+  padding: var(--space-lg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-sizing: border-box;
+}
+
+.helper-install-primary h3 {
+  margin: 0 0 var(--space-sm);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+
+.helper-install-primary > .btn,
+.helper-install-primary > .code-block {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.helper-install-primary .install-step-body {
+  margin-bottom: var(--space-md);
+}
+
+.helper-install-primary .install-step-hint {
+  margin-bottom: 0;
+}
+
+.helper-install-alternatives {
+  width: 100%;
+  margin-top: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-sizing: border-box;
+  text-align: left;
+}
+
+.helper-install-alternatives summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.helper-install-alternatives[open] summary {
+  margin-bottom: var(--space-md);
+  color: var(--text-primary);
+}
+
+.helper-install-alternative-heading {
+  display: block;
+  margin: var(--space-md) 0 var(--space-sm);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.helper-install-alternative-heading:first-of-type {
+  margin-top: 0;
+}
+
+.helper-install-alternatives > .btn {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: var(--space-sm);
+}
+
+.helper-install-alternatives .code-block {
+  margin-bottom: var(--space-sm);
+}
+
+.install-advanced-docs {
+  display: inline-block;
+  margin-top: var(--space-sm);
+  color: var(--text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.install-advanced-docs:hover {
+  color: var(--ts-blue);
+}
+
+.helper-install-next {
+  width: 100%;
+  margin-top: var(--space-lg);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.helper-install-next strong {
+  color: var(--text-primary);
+}
+
+.helper-install-next p {
+  margin: var(--space-xs) 0;
+  line-height: var(--line-height-relaxed);
+}
+
+.helper-install-next .helper-discovery-retry {
+  margin-top: var(--space-sm);
 }
 
 /* ==============================

@@ -2,9 +2,9 @@
 
 > Access your Tailscale network directly from your browser. No system VPN required.
 
-**Version:** 0.1.13 (native host) | Manifest V3
+**Version:** 0.1.14 (native host) | Manifest V3
 **Browsers:** Chrome, Firefox
-**Platforms:** macOS (amd64, arm64), Linux (amd64 packages; amd64/arm64 raw helpers), Windows (amd64, including x64 emulation on Windows ARM64)
+**Platforms:** macOS (amd64, arm64), Linux (amd64 packages; amd64/arm64 raw helpers), Windows (amd64 MSI; amd64/arm64 raw helpers). Chrome Flatpak is an explicit Linux installation option
 **License:** MIT
 **Website:** [tesseras.org/tailchrome](https://tesseras.org/)
 **Chrome Web Store:** [Chrome Web Store](https://chromewebstore.google.com/detail/tailchrome/bhfeceecialgilpedkoflminjgcjljll)
@@ -148,7 +148,7 @@ Each browser profile gets its own isolated Tailscale identity, meaning you can b
 - **Reliable helper activation** -- package downloads start a session-persisted discovery retry schedule; current-user registration repair is promoted only if package discovery still fails
 - **Actionable helper recovery** -- missing registration, permission denial, startup failure, unexpected stop, helper-reported errors, and explicit protocol incompatibility have distinct recovery copy
 - **Local helper diagnostics** -- on-demand copy/export produces a bounded, allowlisted report with sensitive values redacted; nothing is submitted automatically
-- **Non-blocking version notices** -- a helper/release version difference is informational; optional commands remain gated by advertised capabilities
+- **Non-blocking version notices** -- a helper/release version difference alone is informational; authenticated-proxy support is required, while optional commands remain gated by advertised capabilities
 - **Exit node persistence** -- last-selected exit node restored automatically after reconnection
 - **Toast notifications** -- in-popup toasts for operations (file send, errors, suggestions)
 - **Keyboard navigation** -- peer list supports arrow key navigation
@@ -205,6 +205,9 @@ Communication uses the Chrome native messaging wire format: a **4-byte little-en
 | `fileSendProgress`   | During file send                    | `{ targetNodeID, name, percent, done, error? }` |
 | `diagnostic`         | After `ping-peer`, `netcheck`, or `bug-report` | `{ title, body }`                       |
 | `error`              | On command failure                  | `{ cmd, message }`                              |
+
+`bug-report` is accepted by the Go host protocol. The current TypeScript
+`NativeRequest` union and extension do not send it.
 
 
 ### StatusUpdate Structure
@@ -270,6 +273,8 @@ The shared package contains all the platform-agnostic logic. The extension packa
 | `../helper-diagnostics.ts` | Pure diagnostic sanitizer, allowlist, bounds, and local report formatter |
 | `badge-manager.ts` | Extension icon/badge updates for online, offline, warning, and exit-node states |
 | `proxy-utils.ts` | IPv4/CIDR helpers, MagicDNS/split-domain sanitization, subnet collection, and proxy decisions |
+| `routing-protection.ts` | Persisted, account-scoped routing policy and fail-closed behavior across helper or worker restarts |
+| `proxy-session.ts` | In-memory helper proxy credentials and authenticated session handoff to browser-specific managers |
 | `domain-split.ts` | Split-tunneling config storage and normalization |
 | `auto-connect.ts` | Auto-connect preference, per-session handled flag, and session connection intent (`wantRunning` init hint) |
 | `timer-service.ts` | Browser-neutral timer interface and native-timer implementation |
@@ -302,7 +307,7 @@ The shared package contains all the platform-agnostic logic. The extension packa
 | `disconnected.ts` | Starting, reconnecting, stopped, and helper-error recovery states |
 | `needs-login.ts` | Login prompt and coordination-server settings |
 | `needs-install.ts` | Package installation and registration-repair entry point |
-| `install-helpers.ts` | Runtime platform/architecture selection, package-first instructions, and verified repair UI |
+| `install-helpers.ts` | Runtime platform/architecture selection, per-user setup, terminal commands, and registration recovery |
 
 
 `**packages/shared/src/popup/components/**`
@@ -324,8 +329,11 @@ The shared package contains all the platform-agnostic logic. The extension packa
 
 | File                       | Purpose                                                                 |
 | -------------------------- | ----------------------------------------------------------------------- |
-| `chrome-proxy-manager.ts`  | PAC script generation for Chrome                                        |
-| `firefox-proxy-manager.ts` | `proxy.onRequest` listener for Firefox with session storage persistence |
+| `chrome.ts`                | Chrome background bootstrap, durable reconnect timer, and proxy-auth wiring |
+| `chrome-proxy-manager.ts`  | Mandatory PAC generation, ownership verification, and fail-closed routing |
+| `chrome-proxy-auth.ts`     | Per-helper HTTP proxy credentials and Chrome authentication callbacks     |
+| `firefox.ts`               | Firefox background bootstrap and alarm-based keepalive                    |
+| `firefox-proxy-manager.ts` | `proxy.onRequest` listener with authenticated, fail-closed SOCKS routing  |
 
 
 `**packages/extension/entrypoints/**`
@@ -364,14 +372,16 @@ The native host is a Go binary at `host/` using `tailscale.com/tsnet` pinned to 
 
 | File | Purpose |
 | --- | --- |
-| `main.go` | Entry point, install/uninstall/version flags, proxy startup, and native messaging mode |
+| `main.go` | Entry point, proxy startup, and native messaging mode |
+| `cli.go` | Explicit install/uninstall/version command parsing and legacy setup compatibility |
 | `host.go` | Framing loop, synchronized tsnet session lifecycle, request dispatch, prefs/login/diagnostic handlers, and bounded status replies |
 | `protocol.go` | Wire protocol types and 1 MiB message limit |
 | `status.go` | Retrying IPN bus watcher, debounced refresh, cached notification state, and `StatusUpdate` construction |
-| `proxy.go` | SOCKS5/HTTP multiplexing, lazy quad-100 web client, and buffered CONNECT tunneling |
+| `proxy.go` / `proxy_policy.go` | SOCKS5/HTTP multiplexing, authenticated destination policy, lazy quad-100 web client, and buffered CONNECT tunneling |
+| `dns.go` / `exit_dns.go` | Restricted split-DNS forwarding and exit-node DNS behavior |
 | `profiles.go` | Profile management through the current local-client snapshot |
 | `taildrop.go` | Chunk reassembly, asynchronous cancellable `PushFile`, progress, and cleanup |
-| `install.go` / `install_*.go` | Cross-platform native host installation and cleanup |
+| `install.go` / `install_*.go` | Cross-platform native host installation and cleanup, including Chrome Flatpak sandbox state and registration |
 | `peers.go` | Peer/status conversion from Tailscale types |
 | `exitnode.go` | Exit-node selection and suggestion handlers |
 | `*_test.go` | Framing, proxy, peer conversion, status/prefs, Taildrop, installer, and platform-specific regression coverage |
@@ -392,7 +402,7 @@ The proxy uses Tailscale's `proxymux.SplitSOCKSAndHTTP()` to multiplex a single 
 
 - **SOCKS5 traffic** is handled by `tailscale.com/net/socks5`, with authentication and the helper's destination policy applied before dialing.
 - **HTTP traffic** is handled by an `httputil.ReverseProxy` with the same authentication and destination checks.
-- **Requests to `100.100.100.100`** are routed to the Tailscale web client (`web.Server` in `ManageServerMode`), with a `Sec-Tailscale: browser-ext` header for CSRF protection.
+- **Requests to `100.100.100.100`** are routed to the Tailscale web client (`web.Server` in `ManageServerMode`). Proxy authentication is checked first; the web client then enforces its own session, capability and CSRF checks.
 - **HTTPS CONNECT** requests are hijacked for bidirectional tunneling through tsnet.
 
 All three proxy paths resolve restricted DNS domains through configured IP nameservers, validating both the nameserver route and returned IPs against the current session's routing policy before dialing. The IPN watcher sends authoritative restricted domains as `dnsRoutes`, retaining `splitDNSDomains` for compatibility; disabling `corpDNS` or removing a route clears the corresponding browser routing. An omitted `dnsRoutes` field indicates that configuration is not yet known and preserves existing protection. See [Split DNS](split-dns.md) for setup and nameserver routing requirements.
@@ -401,7 +411,7 @@ The loopback proxy requires a fresh random credential on every helper launch. Ch
 
 ### Auto-Installation
 
-When the raw host binary is run in a terminal (detected via `term.IsTerminal`), it auto-detects installed browsers and installs native messaging manifests for Chrome-family browsers and Firefox. The binary copies itself to the per-user helper directory (`~/.local/share/tailscale/browser-ext/`, `~/Library/Application Support/Tailscale/BrowserExt/`, or `%LOCALAPPDATA%\Tailscale\BrowserExt\`) and writes JSON manifests to each browser's native messaging host location.
+Running the raw host without a command in a terminal retains legacy setup: it copies itself to the historical per-user helper directory and registers all supported browsers. New installers place the executable at their stable path and invoke `install --binary-path PATH`. This direct command registers Chrome, Firefox, and detected optional browsers without making another executable copy. See [helper installation](helper-installation.md) for explicit browser selection and legacy compatibility.
 
 ---
 
@@ -430,6 +440,12 @@ Chrome uses a dynamically generated PAC (Proxy Auto-Config) script set via `chro
 
 The Chrome PAC target is `PROXY 127.0.0.1:<port>`, with HTTP proxy authentication supplied by the background handler.
 
+Chrome [hides some browser-internal requests from extension request handlers](https://developer.chrome.com/docs/extensions/reference/api/webRequest#concepts_and_usage).
+When routed through the helper, those requests may fail proxy authentication;
+Tailchrome does not bypass authentication or protected routing to make them
+succeed. An individual tunnel failure does not by itself establish that the
+proxy settings or all protected browsing have failed.
+
 Successful PAC settings are reused until routing changes. Worker suspension preserves the browser settings; reconnecting replaces the helper endpoint after confirmation.
 
 ### Firefox: proxy.onRequest
@@ -454,6 +470,9 @@ The popup reports routing failures separately from the Tailscale connection. Cho
 
 ```typescript
 interface TailscaleState {
+  routingPolicy?: RoutingPolicy;   // Effective active/blocked/direct routing decision
+  routingHealth?: RoutingHealth;   // Browser proxy ownership and availability
+  selectedExitNodeID?: string | null;
   stateVersion: number;        // Monotonically increasing counter
   hostConnected: boolean;
   initialized: boolean;
@@ -466,10 +485,11 @@ interface TailscaleState {
   exitNode: ExitNodeInfo | null;
   magicDNSSuffix: string | null;
   splitDNSDomains: string[];
-  dnsRoutes: string[];
+  dnsRoutes?: string[];
   browseToURL: string | null;
   prefs: TailscalePrefs | null;
   health: string[];
+  pendingExitNodeID: string | null; // Optimistic selection until host confirmation
   currentProfile: ProfileInfo | null;
   profiles: ProfileInfo[];
   exitNodeSuggestion: ExitNodeSuggestion | null;
@@ -503,7 +523,15 @@ interface TailscaleState {
 
 **BackgroundMessage** (popup -> background):
 
-- `toggle`, `login`, `logout`, `retry-native-host`, `set-exit-node`, `clear-exit-node`, `set-pref`, `switch-profile`, `new-profile`, `delete-profile`, `send-file`, `suggest-exit-node`, `open-admin`, `open-web-client`
+- Connection and recovery: `release-routing`, `toggle`, `login`,
+  `disconnect-and-login`, `logout`, and `retry-native-host`
+- Routing and preferences: `set-exit-node`, `clear-exit-node`, `set-pref`,
+  `set-advertise-routes`, `set-domain-split`, and
+  `set-auto-connect-on-start`
+- Profiles and diagnostics: `switch-profile`, `new-profile`,
+  `delete-profile`, `ping-peer`, and `netcheck`
+- Files and navigation: `send-file`, `suggest-exit-node`, `open-admin`, and
+  `open-web-client`
 
 ### Helper activation state
 
@@ -516,7 +544,7 @@ interface TailscaleState {
 | `helper-start-failed` | The browser found the host, but startup failed before a healthy connection | Retry, package repair, and local diagnostics |
 | `helper-stopped` | A previously healthy helper connection closed | Automatic reconnect plus manual retry |
 | `helper-reported-error` | The helper started and returned an explicit startup/protocol error | Retry, package repair, and local diagnostics |
-| `helper-incompatible` | An explicit unsupported future protocol is reported | Compatible release installer update/repair; a version string alone never causes this state |
+| `helper-incompatible` | The helper omits a valid supported authenticated-proxy session (`helper-proxy-auth-required`) | Update the helper and extension together; a version string alone never causes this state |
 
 Starting a package or verified repair records a retry deadline in
 `chrome.storage.session`. Attempts run after 2, 5, 10, 20, and 30 seconds and
@@ -568,19 +596,25 @@ does not participate in routing.
 +----------------------------------+
 | [Tailscale logo]  [Toggle ON/OFF]|
 +----------------------------------+
+| Status: Connected to <tailnet>   |
+| IP: 100.x.y.z                    |
++----------------------------------+
 | [Health warning banner]          |
 +----------------------------------+
-| Status: Connected to <tailnet>   |
-| IP: 100.x.y.z                   |
-+----------------------------------+
-| Quick Settings:                  |
-|   Exit node: [current / None]  >|
+|   Exit Node: [current / None]   >|
+|   Split tunneling: [mode]       >|
 |   Shields Up           [toggle]  |
-|   Run as Exit Node     [toggle]  |
 |   MagicDNS             [toggle]  |
-|   Profile: [name]              > |
+|   Auto-connect on start [toggle] |
+|   Advanced             [toggle]  |
+|     Run as Exit Node   [toggle]  |
+|     Local node page: Open       >|
+|     Coordination server         >|
+|   Advertise subnets    [toggle]  |
+|   Profile: [name] (optional)   > |
+|   Open as side panel   [toggle]  |
 +----------------------------------+
-| [Search peers...]                |
+| [Search devices…] (6+ peers)     |
 +----------------------------------+
 | ONLINE (3)                       |
 |   > laptop  100.10.1.1  linux    |
@@ -589,11 +623,21 @@ does not participate in routing.
 | OFFLINE (1)                      |
 |   > desktop 100.10.1.4  windows  |
 +----------------------------------+
-| [Admin console]  [Settings]      |
+| Native helper <version>          |
+| [Admin Console]  [Logout]        |
+| [Star the repo!]                 |
 +----------------------------------+
 ```
 
-**Exit node sub-view:** Opening **Exit node** shows the full picker (search, suggested node, Mullvad grouping where applicable). **Allow LAN access** is a checkbox there—not in Quick Settings. Each peer item expands to show: Copy IP, Copy DNS, Open, SSH (if capable), Send File (if Taildrop target), and a custom URL editor. A **Profile** row is added when `state.profiles` is non-empty (click opens the profile switcher).
+**Exit node sub-view:** Opening **Exit node** shows the full picker (search,
+suggested node, Mullvad grouping where applicable). **Allow LAN access** is a
+checkbox there—not in Quick Settings. **Advertise subnets** expands its own
+editor, independently of **Advanced**. Each peer item expands to show Copy IP,
+Copy DNS, Open, SSH (if capable), Send File (if a Taildrop target), and a custom
+URL editor. A **Profile** row is added when `state.profiles` is non-empty and
+opens the profile switcher. **Admin Console** appears only for Tailscale's
+default coordination server, and the helper-version footer row appears only
+after the host reports a version.
 
 ---
 
@@ -606,10 +650,10 @@ does not participate in routing.
 | Proxy mechanism   | `chrome.proxy.settings` (PAC script)                  | `browser.proxy.onRequest` (listener)         |
 | Background type   | Service worker (persistent with keepalive)            | Event page (suspended aggressively)          |
 | Keepalive         | Native interval; one-shot reconnects also use a durable `chrome.alarms` backup | `browser.alarms` every 25s |
-| State persistence | Local/session preferences plus alarm-backed reconnect | Session storage for proxy config restoration |
+| State persistence | Sanitized local routing snapshot, session intent, and alarm-backed reconnect | Same routing snapshot and session intent; proxy listener starts blocked on wake |
 | Native host ID    | `com.tailscale.browserext.chrome`                     | `com.tailscale.browserext.firefox`           |
 | Permissions       | `proxy`, `storage`, `nativeMessaging`, `contextMenus`, `alarms`, `sidePanel` | Same except `sidePanel`                     |
-| Min version       | --                                                    | Firefox 140+                                 |
+| Min version       | --                                                    | Firefox 142+                                 |
 | Distribution      | Chrome Web Store                                      | [Firefox Add-ons (AMO)](https://addons.mozilla.org/firefox/addon/tailchrome/) |
 | Extension ID      | `bhfeceecialgilpedkoflminjgcjljll` (CWS)              | `tailchrome@tesseras.org` (gecko)            |
 
@@ -618,8 +662,8 @@ does not participate in routing.
 
 - **Alarms keepalive:** Firefox suspends event pages after ~30s of inactivity. A `browser.alarms` alarm fires every 25s to send a keepalive ping and prevent suspension.
 - **Synchronous listener registration:** Proxy, runtime connection, storage, install, context-menu, alarm, startup, and sidebar listeners are all registered during initial script evaluation. Storage restoration begins first but never delays event-listener registration.
-- **Proxy listener registration:** The `proxy.onRequest` listener is registered at extension load and persists across suspensions. On wake, it returns a `Promise` that waits for session storage restoration and a conclusive native-host state.
-- **Session storage:** Proxy config is persisted to `browser.storage.session` so that routing decisions can be made even before the native host reconnects after a suspension.
+- **Proxy listener registration:** The `proxy.onRequest` listener is registered at extension load and persists across suspensions. It starts in blocked mode, then follows the effective policy after the shared routing snapshot is restored and live helper state arrives.
+- **Persisted protection:** `routingProtectionV1` stores a sanitized, account-scoped routing snapshot in local storage. It excludes helper ports and credentials; Firefox obtains fresh proxy credentials from the native connection before protected requests can use the helper.
 - **Data collection disclosure:** Firefox AMO requires explicit data collection permissions declared in the manifest via `gecko.data_collection_permissions`.
 
 ---
@@ -631,40 +675,39 @@ does not participate in routing.
 **Chrome:**
 
 1. Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/tailchrome/bhfeceecialgilpedkoflminjgcjljll)
-2. Install the native helper from [GitHub Releases](https://github.com/dantraynor/tailchrome/releases/latest): **`tailchrome-helper-macos-user.zip`** on macOS, **`tailchrome-helper-windows-x64.msi`** on Windows, or the verified **`tailchrome-install.sh`** on Linux. These install for your account without administrator access.
+2. Follow the popup's per-user setup: the helper app on macOS, MSI on Windows x64, PowerShell installer on Windows ARM64, or terminal installer on Linux. The matching assets come from [GitHub Releases](https://github.com/dantraynor/tailchrome/releases/latest); [helper installation](helper-installation.md) documents the commands and alternatives.
 3. Log in to your Tailscale account
 
 **Firefox:**
 
 1. Install from [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/tailchrome/) or the matching [GitHub Release](https://github.com/dantraynor/tailchrome/releases/latest)
-2. Install the same native helper used for Chrome: the helper app on macOS, **`.msi`** on Windows, or the verified per-user installer on Linux.
+2. Follow the same per-user helper setup used for Chrome.
 3. Log in to your Tailscale account
 
 ### Native Host Installation
 
-The popup offers installation for your account. macOS and Linux amd64 also have system packages:
+The v0.1.14 helper separates binary placement from browser registration.
+`tailchrome install` registers the installed executable directly, prints paths,
+and supports custom extension IDs and browser targets. Chrome and Firefox are
+registered for first use; optional browsers use installation footprints unless
+explicitly requested. Linux registration honors XDG configuration paths.
 
-- **macOS:** open `tailchrome-helper-macos-user.zip`, then open the included **Tailchrome Helper** app to install for your account. The signed app includes a universal helper. For a system installation, `tailchrome-helper-macos.pkg` installs a universal binary and runs `tailscale-browser-ext -install-now` for the logged-in user during package postinstall. `Tailchrome Helper.app` remains in `/Applications` as a repair/re-run fallback.
-- **Windows:** the Authenticode-signed `tailchrome-helper-windows-x64.msi` embeds the identically signed raw EXE, installs a staged helper under `%LOCALAPPDATA%\Tailscale\BrowserExt\installer\`, and runs it with `-install-now`, which writes HKCU native messaging registrations. Windows ARM64 uses this package through x64 emulation. After downloading the MSI, repair from either Command Prompt or PowerShell with `powershell.exe -NoProfile -Command "msiexec.exe /fa (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads\tailchrome-helper-windows-x64.msi')"`; uninstall through **Installed apps**.
-- **Linux amd64:** `.deb` and `.rpm` packages install `/usr/lib/tailchrome/tailscale-browser-ext` plus system-wide manifests for Chrome, Chromium, Edge, and Firefox. They do not write per-user state in package hooks.
-- **Linux per-user (amd64/ARM64):** download `tailchrome-install.sh` from the exact versioned release, inspect it, download `SHA256SUMS.txt`, and run `bash ~/Downloads/tailchrome-install.sh --version "vX.Y.Z"`. The script selects and verifies the matching raw helper, optionally verifies its GitHub attestation when `gh` is available and authenticated, invokes `-install-now`, and confirms the installed executable. Never pipe a remote script directly into a shell.
+The Unix and PowerShell installers select a release and architecture, verify
+the artifact, replace the stable user-owned executable safely, and invoke this
+command. Latest stable is the general default; an explicit version remains
+available. macOS app, MSI, Homebrew and Linux system packages retain ownership
+of their own executable. Install and registration repair use the same entry
+point. Windows signature status follows the release's recorded signing mode;
+see [the policy](WINDOWS_CODE_SIGNING_POLICY.md).
 
-On macOS and Linux, the same version-pinned script also repairs current-user
-registration after package discovery fails. It selects the exact
-amd64/arm64 artifact for the machine. The raw native host binary remains
-available for advanced/manual installs. When run interactively in a terminal,
-or non-interactively via **`tailscale-browser-ext -install-now`**, it:
+Legacy installer flags remain compatible and retain their historical staging
+behavior. Existing native-host names and extension IDs are unchanged. The new
+`uninstall` command removes registrations owned by its executable; the installer
+or package manager removes the executable. Node state is preserved.
 
-- Detects installed browsers and writes per-browser manifests for the whole Chromium family (Chrome stable/beta/canary/dev, Chromium, Brave, Edge, Vivaldi, Opera, Arc on macOS) plus Firefox
-- Copies itself to `~/.local/share/tailscale/browser-ext/` (Linux), `~/Library/Application Support/Tailscale/BrowserExt/` (macOS), or `%LOCALAPPDATA%\Tailscale\BrowserExt\` (Windows)
-- Reports per-browser install status so unsupported or missing browsers are skipped cleanly
-- Manual install: `./tailscale-browser-ext --install C<extensionID>` (Chromium-family) or `--install F<extensionID>` (Firefox)
-- Uninstall the per-user helper by running the installed executable with
-  `-uninstall`: `~/.local/share/tailscale/browser-ext/tailscale-browser-ext`
-  on Linux or
-  `~/Library/Application Support/Tailscale/BrowserExt/tailscale-browser-ext`
-  on macOS. The verified script also accepts `--uninstall` with the same
-  required release version and invokes this installed path.
+See [helper installation](helper-installation.md) for exact commands, executable
+paths, legacy behavior, safe upgrades, uninstall and Chrome Flatpak setup. The
+matching release's installer assets must exist before distributing its extension.
 
 ### State Directory
 
@@ -675,6 +718,11 @@ Per-profile Tailscale state is stored at:
 ```
 
 Each browser profile generates a UUID on first connection, stored in `chrome.storage.local` as `profileId`.
+
+Native installations keep this historical location even when browser manifest
+registration uses XDG paths. Chrome Flatpak uses its sandbox's writable XDG
+configuration directory for separate node state. Installing the sandbox helper
+does not migrate or delete native node identities.
 
 ---
 
@@ -688,7 +736,10 @@ tailchrome/
 |   |   |   +-- background.ts        # Background entry (routes to chrome/firefox)
 |   |   |   +-- popup/               # Popup HTML, CSS, entry
 |   |   +-- src/background/
+|   |   |   +-- chrome.ts            # Chrome bootstrap and proxy-auth wiring
+|   |   |   +-- firefox.ts           # Firefox bootstrap and keepalive
 |   |   |   +-- chrome-proxy-manager.ts
+|   |   |   +-- chrome-proxy-auth.ts
 |   |   |   +-- firefox-proxy-manager.ts
 |   |   +-- config/
 |   |   |   +-- firefox-disclosure.ts # AMO data collection declaration
@@ -707,6 +758,8 @@ tailchrome/
 |       |   |   +-- state-store.ts    # State management
 |       |   |   +-- badge-manager.ts  # Icon/badge updates
 |       |   |   +-- proxy-utils.ts    # IP/CIDR/DNS utilities
+|       |   |   +-- routing-protection.ts # Persisted fail-closed routing policy
+|       |   |   +-- proxy-session.ts  # Authenticated helper proxy session
 |       |   |   +-- timer-service.ts  # Timer abstraction
 |       |   |   +-- chrome-alarm-timer-service.ts # MV3 durable reconnect timeout
 |       |   |   +-- domain-split.ts   # Split-tunneling persistence
@@ -740,15 +793,19 @@ tailchrome/
 |
 +-- host/                             # Native messaging host (Go)
 |   +-- main.go                       # Entry point
+|   +-- cli.go                        # Explicit install/uninstall/version CLI
 |   +-- host.go                       # Host struct, message loop, handlers
 |   +-- protocol.go                   # Wire protocol types
 |   +-- status.go                     # IPN bus watcher
 |   +-- proxy.go                      # SOCKS5/HTTP proxy
+|   +-- proxy_policy.go               # Authenticated destination policy
+|   +-- dns.go / exit_dns.go          # Split and exit-node DNS forwarding
 |   +-- profiles.go                   # Profile management
 |   +-- taildrop.go                   # File transfer
 |   +-- install.go                    # Manifest installation
 |   +-- install_darwin.go             # macOS paths
 |   +-- install_linux.go              # Linux paths
+|   +-- install_flatpak_*.go          # Chrome Flatpak sandbox registration
 |   +-- install_windows.go            # Windows paths + registry
 |   +-- peers.go                      # Peer info extraction
 |   +-- exitnode.go                   # Exit node handlers
@@ -758,10 +815,22 @@ tailchrome/
 +-- config/
 |   +-- extension-ids.json            # Extension & native host IDs
 |
++-- packaging/                        # Platform packages and native manifests
+|   +-- homebrew/                     # Formula/cask maintenance docs
+|   +-- linux/                        # nFPM DEB/RPM definition and builder
+|   +-- macos/                        # PKG builder and per-user repair app
+|   +-- windows/                      # WiX MSI and native ARM64 smoke
++-- Casks/tailchrome.rb               # Published macOS Homebrew cask
++-- Formula/tailchrome.rb             # Source-built macOS/Linux formula
+|
 +-- scripts/
 |   +-- e2e/                         # Puppeteer runner, fixtures, native-host mock, scenarios
-|   +-- install.sh                   # Pinned, verified macOS/Linux repair installer
+|   +-- install.sh                   # Verified macOS/Linux per-user installer
+|   +-- install.ps1                  # Verified Windows amd64/ARM64 per-user installer
 |   +-- install.test.sh              # Hermetic installer tests
+|   +-- install.test.ps1             # Portable PowerShell installer fixtures
+|   +-- test-flatpak.sh              # In-sandbox Chrome native-messaging smoke
+|   +-- update-homebrew.mjs          # Release-driven cask/formula updater
 |   +-- verify-windows-signatures.ps1 # Authenticode and embedded-EXE verifier
 |   +-- validate-extension-ids.mjs   # Extension/native manifest drift check
 |   +-- validate-release-tag.mjs     # Cross-file release version check
@@ -774,6 +843,8 @@ tailchrome/
 |   +-- FEATURE_PARITY.md
 |   +-- STORE_LISTING.md
 |   +-- puppeteer-testing-suite.md
+|   +-- helper-installation.md
+|   +-- split-dns.md
 |   +-- DOCUMENTATION.md              # This file
 |   +-- CONTRIBUTING.md
 |   +-- SOURCE_CODE_REVIEW.md         # Firefox AMO reviewer guide
@@ -784,9 +855,11 @@ tailchrome/
 |
 +-- .github/workflows/
 |   +-- ci.yml                        # PR checks
+|   +-- flatpak-smoke.yml             # Chrome Flatpak helper smoke on PRs
 |   +-- release.yml                   # Immutable tagged candidate builds
 |   +-- publish-helper-release.yml    # Protected exact-candidate publication
 |   +-- publish.yml                   # Store submission
+|   +-- update-homebrew.yml           # Post-release tap update proposal
 |
 +-- Makefile                          # Top-level build targets
 +-- package.json                      # Root workspace scripts
@@ -822,12 +895,18 @@ tailchrome/
 | `pnpm typecheck`                  | Run TypeScript type checking                                       |
 | `pnpm test`                       | Run all tests (vitest)                                             |
 | `pnpm test:installer`             | Run hermetic verified-installer shell tests                        |
+| `pnpm test:homebrew`              | Run Homebrew release-updater tests                                 |
 | `pnpm validate:ids`               | Validate extension ID consistency                                  |
 | `pnpm validate:release-tag <tag>` | Validate release tag format                                        |
 | `make host`                       | Build native host for current platform                             |
 | `make host-all`                   | Build host binaries for all platforms                              |
 | `make host-linux-amd64`           | Build the Linux package input                                      |
 | `make host-linux-arm64`           | Build the Linux ARM64 raw helper                                   |
+| `make host-windows-amd64`         | Build the Windows amd64 raw helper                                 |
+| `make host-windows-arm64`         | Build the Windows ARM64 raw helper                                 |
+| `make macos-pkg`                  | Build the macOS system package and per-user app (macOS only)       |
+| `make windows-msi`                | Build an unsigned development MSI (Windows with WiX only)          |
+| `make linux-packages`             | Build the Linux DEB and RPM packages with nFPM                     |
 | `make dev`                        | Chrome watch mode via WXT                                          |
 | `make all`                        | Build extension + host                                             |
 | `make clean`                      | Clean all build outputs                                            |
@@ -855,7 +934,7 @@ WXT (`packages/extension/wxt.config.ts`) handles:
 - Manifest V3 generation for Chrome and Firefox
 - Icon definitions (online, offline, warning states at 16/32/48/128px)
 - Chrome extension key for stable development ID
-- Firefox gecko settings (addon ID, `strict_min_version: "140.0"`, data collection permissions)
+- Firefox gecko settings (addon ID, `strict_min_version: "142.0"`, data collection permissions)
 - Source ZIP configuration for AMO review (allowlisted paths only)
 - Vite alias `@tailchrome/shared` -> `packages/shared/src`
 
@@ -872,10 +951,22 @@ SHA-pinned path filter enables host/packaging work only when relevant files
 change:
 
 - **host-build** (Linux): dependency download, `go vet`, race-enabled Go tests, and the native host build
-- **host-windows-tests**: Windows-specific Go tests
+- **host-windows-tests**: Windows-specific Go tests and PowerShell installer fixtures
+- **windows-arm64-smoke**: native ARM64 executable and installer checks
+- **homebrew** (when tap/updater files change): formula source build, install,
+  registration, test, and uninstall on Linux and macOS; macOS also validates
+  the published signed cask
 - **package-linux**: amd64/arm64 raw builds with architecture checks plus `.deb` and `.rpm` generation with pinned nFPM and ownership-boundary inspection
 - **macos-package-smoke**: unsigned package smoke build that asserts the launchable `/Applications/Tailchrome Helper.app` payload
 - **windows-signature-verifier**: fixed-SDK positive/negative Authenticode verifier fixtures
+- **workflow-static-validation**: actionlint over every workflow and ShellCheck
+  over installer and packaging scripts
+
+### Chrome Flatpak smoke (`flatpak-smoke.yml`) -- Pull Requests or Manual Dispatch
+
+This separate workflow creates a clean user-scoped Chrome Flatpak installation,
+installs the helper into its sandbox, verifies native-message framing from
+inside the sandbox, uninstalls it, and retains diagnostics even on failure.
 
 ### Candidate (`release.yml`) -- Runs on `v`* Tags or Manual Dispatch
 
@@ -884,12 +975,12 @@ immutable SHA in every downstream checkout. It:
 
 1. Validates extension IDs, the release tag, and the tag-to-source relationship
 2. Builds `chrome.zip`, `firefox.zip`, `firefox-sources.zip`
-3. Builds raw helpers for macOS amd64/arm64, Linux amd64/arm64, and Windows amd64
+3. Builds raw helpers for macOS, Linux, and Windows, each for amd64 and arm64
 4. **Verifies Firefox source ZIP**: extracts sources, rebuilds from scratch, `diff -qr` against original to ensure reproducibility
 5. Signs/notarizes the macOS binaries, app, and package and verifies every layer
-6. Builds and inspects Linux `.deb`/`.rpm` packages and includes the version-pinned repair script
-7. Requires exactly one configured Windows signing integration to sign and verify the raw EXE before MSI construction, then signs and verifies the outer MSI and its embedded EXE
-8. Runs Defender on the exact Windows candidate with cloud-delivered protection enabled
+6. Builds and inspects Linux `.deb`/`.rpm` packages and includes the Unix and PowerShell bootstraps
+7. In signed mode, verifies both raw Windows EXEs, the outer x64 MSI, and its embedded amd64 EXE against the configured signing policy; explicit unsigned mode records its exception
+8. Requires native ARM64 runtime evidence and, in signed mode, Defender evidence for both raw Windows EXEs and the MSI
 9. Assembles the complete allowlisted matrix, generates `SHA256SUMS.txt` only after final signing/packaging, creates build-provenance attestations, and stores the immutable candidate for 90 days
 
 The candidate workflow has no release-write permission and never publishes
@@ -931,6 +1022,14 @@ Two jobs with **environment-gated approvals**:
   - Submits via `pnpm wxt submit --firefox-zip --firefox-sources-zip --firefox-channel listed`
   - Supports `dry_run` mode
 
+### Homebrew update (`update-homebrew.yml`) -- Reusable or Manual
+
+After a stable helper release is published, this workflow verifies the release
+tag and checksum-manifest digest, computes the tagged source-archive checksum,
+updates the cask and source formula, reruns updater and Ruby syntax checks, and
+opens a reviewable pull request. It uploads the patch as a manual fallback if
+pull-request creation is unavailable.
+
 ---
 
 ## Test Infrastructure
@@ -951,6 +1050,9 @@ Two jobs with **environment-gated approvals**:
 | `state-store.test.ts`              | State management: `update()`, `applyStatusUpdate()`, `subscribe()`, version incrementing                       |
 | `badge-manager.test.ts`            | Icon/badge updates for all state combinations                                                                  |
 | `proxy-utils.test.ts`              | IP conversion, CIDR parsing, MagicDNS sanitization, subnet collection                                          |
+| `routing-protection.test.ts`       | Persisted routing snapshots, account scoping, fail-closed transitions, and explicit release                    |
+| `proxy-session.test.ts`            | Helper proxy credential lifecycle and session replacement                                                       |
+| `auto-connect.test.ts`             | Backend eligibility, local preference, session handled flag, and persisted connection intent                    |
 | `timer-service.test.ts`            | Timer abstraction contract                                                                                     |
 | `chrome-alarm-timer-service.test.ts` | MV3 alarm-backed reconnect timeout and one-shot deduplication                                                 |
 | `ui-surface.test.ts`               | Side panel toggle plumbing: persistence, applyUiSurface, sidebar opener registration                           |
@@ -961,9 +1063,11 @@ Two jobs with **environment-gated approvals**:
 
 | Test File                       | Covers                                                     |
 | ------------------------------- | ---------------------------------------------------------- |
-| `chrome-proxy-manager.test.ts`  | PAC script generation, proxy enable/disable, deduplication |
-| `firefox-proxy-manager.test.ts` | Proxy listener, session storage persistence/restoration    |
-| `firefox.test.ts`               | Firefox-specific keepalive via alarms                      |
+| `chrome-proxy-manager.test.ts`  | PAC generation, mandatory blocked routing, ownership verification, and deduplication |
+| `chrome-proxy-auth.test.ts`     | Chrome HTTP proxy credential challenges and isolation                       |
+| `chrome.test.ts`                | Chrome bootstrap and PAC preservation across worker suspension              |
+| `firefox-proxy-manager.test.ts` | Authenticated/fail-closed SOCKS routing, DNS and split-tunnel decisions, direct mode, and no-fallback proxy chains |
+| `firefox.test.ts`               | Firefox-specific keepalive via alarms                                        |
 
 
 **Popup tests:**
@@ -980,6 +1084,7 @@ Two jobs with **environment-gated approvals**:
 | `views/connected.test.ts`  | Accessible quick-setting navigation and preservation of unsaved split rules   |
 | `views/disconnected.test.ts` | Reconnecting-state precedence                                                |
 | `views/exit-nodes.test.ts` | Exit node picker: search, Recommended row, Mullvad grouping, selection logic |
+| `views/install-helpers.test.ts` | Platform/architecture asset selection, pinned installer commands, and retry/repair UI |
 | `types.test.ts`            | Shared type guards / fixture sanity                                          |
 
 
@@ -990,17 +1095,31 @@ Two jobs with **environment-gated approvals**:
 | --- | --- |
 | `protocol_test.go` | Invalid/oversized frame recovery, status truncation, and profile-ID validation |
 | `proxy_test.go` | Quad-100 routing and buffered CONNECT bytes |
+| `proxy_policy_test.go`, `proxy_integration_test.go` | Destination authorization, authenticated proxying, web client, and identity-transition gates |
+| `dns*_test.go`, `exit_dns_test.go` | Restricted split DNS, subnet nameservers, exit DNS, cancellation, and fail-closed behavior |
 | `peers_test.go` | Peer IP, route, identity, tag, key-expiry, and capability conversion |
 | `status_test.go` | Status/prefs mapping and cached browse/login state |
 | `taildrop_test.go` | Chunk assembly/progress, validation, cleanup, and active-transfer cancellation |
-| `install_test.go`, `install_windows_test.go` | Manifest/registry installation, extension-ID formatting, and cleanup |
+| `install_test.go`, `install_windows_test.go` | CLI parsing, manifest/registry installation, extension-ID formatting, and cleanup |
+| `install_flatpak_test.go` | Chrome Flatpak ownership, rollback, sandbox containment, locking, CLI flags, and cleanup |
 | `control_url_test.go` | Control-server normalization and validation |
+
+**Installer and platform smoke tests:**
+
+| Test File | Covers |
+| --- | --- |
+| `scripts/install.test.sh` | Hermetic Unix installer downloads, verification, upgrade, rollback, and uninstall |
+| `scripts/install.test.ps1` | Portable Windows architecture selection, verification, replacement, rollback, and uninstall |
+| `scripts/test-flatpak.sh` | Chrome Flatpak sandbox installation, native `procRunning`/`pong` framing, and cleanup; it does not test the store extension, login, or browser routing |
+| `scripts/update-homebrew.test.mjs` | Cask/formula version and checksum updates, validation, downgrade rejection, and idempotence |
 
 
 ### Running Tests
 
 ```bash
 pnpm test              # Run all unit tests once
+pnpm test:installer    # Run the Unix verified-installer fixtures
+pnpm test:homebrew     # Run Homebrew updater tests
 pnpm e2e:chrome        # Puppeteer end-to-end suite (Chrome)
 pnpm e2e:firefox       # Puppeteer end-to-end suite (Firefox)
 pnpm e2e:full          # Full Puppeteer suite, both browsers
@@ -1044,16 +1163,16 @@ The Puppeteer harness lives in `scripts/e2e/`; see [puppeteer-testing-suite.md](
 | Key                   | Storage                                  | Purpose                                                                 |
 | --------------------- | ---------------------------------------- | ----------------------------------------------------------------------- |
 | `profileId`           | `chrome.storage.local`                   | Browser profile UUID for tsnet isolation                                |
-| `lastExitNodeID`      | `chrome.storage.local`                   | Persist exit node selection across reconnects                           |
 | `customUrls`          | `chrome.storage.local`                   | Per-device custom open targets                                          |
 | `domainSplitConfig`   | `chrome.storage.local`                   | Split-tunneling mode (`bypass`/`only`) and domain list                  |
 | `autoConnectOnStart`  | `chrome.storage.local`                   | Opt-in preference for auto-connecting the tailnet on browser start      |
 | `uiSurface`           | `chrome.storage.local`                   | Toolbar surface: `popup` or `sidePanel`/Firefox sidebar                 |
 | `autoConnectHandled`  | `chrome.storage.session`                 | Per-session flag that prevents auto-connect from overriding an explicit manual disconnect |
 | `desiredWantRunning`  | `chrome.storage.session`                 | Per-session connection intent sent as the `wantRunning` hint with host init |
+| `lastSessionWantRunning` | `chrome.storage.local`                 | Temporary fallback intent across extension reload/update; cleared at the next browser startup |
 | `helperActivationRetry` | `chrome.storage.session`               | Source, retry index, and absolute helper-discovery deadline |
 | `helperRegistrationRepairAvailable` | `chrome.storage.session`    | Whether package/fallback discovery exhausted and repair should be promoted |
-| `proxyConfig`         | `browser.storage.session` (Firefox only) | Proxy state for surviving background suspension                         |
+| `routingProtectionV1` | `chrome.storage.local`                   | Sanitized account-scoped routing snapshots and transition state for fail-closed restoration; excludes helper ports and credentials |
 
 
 ---
@@ -1073,10 +1192,22 @@ For a configured custom coordination server, delegated login URLs may use anothe
 ### Helper compatibility
 
 The extension does not infer protocol incompatibility from semantic versions.
-An installed/release version difference produces only a dismissible notice, and
-features are enabled from the capabilities advertised by the connected helper.
-Setup is blocked only when the helper explicitly reports an unsupported future
-protocol.
+A version difference alone produces a dismissible notice. Optional features
+are enabled from the capabilities advertised by the connected helper.
+
+Authenticated-proxy support is mandatory starting with v0.1.14. The helper must
+provide a valid `procRunning.proxyAuth` session using the supported protocol
+version and a valid proxy port. Missing or invalid session credentials produce
+`helper-incompatible` with diagnostic code `helper-proxy-auth-required`, and the
+extension does not enable that proxy.
+
+Upgrade the helper and extension together from v0.1.13 or earlier. The older
+helper does not provide proxy credentials; the older extension uses
+unauthenticated SOCKS and cannot authenticate to the new helper. Consequently,
+neither mixed pair can provide normal protected browsing. Publish the matching
+helper assets before the store rollout, and complete both updates before
+resuming protected browsing. A version-only compatibility test must use a
+helper fixture that supplies the required authenticated session.
 
 ### Helper artifacts
 
@@ -1086,13 +1217,14 @@ notarization, and packaging. When GitHub CLI is available,
 artifact's build provenance. On macOS, use `pkgutil --check-signature` for the
 package and `codesign --verify --deep --strict` plus `spctl` for the embedded
 app. On Windows, use `Get-AuthenticodeSignature` or SignTool; the release gate
-additionally verifies the raw EXE, the byte-identical MSI-embedded EXE, and the
-outer MSI against one exact publisher subject and timestamp policy.
+additionally verifies both raw EXEs, the byte-identical amd64 MSI-embedded EXE,
+and the outer MSI against one exact publisher subject and timestamp policy.
 
-Windows publication remains disabled until one signing provider and its exact
-publisher subject have been recorded. Missing credentials, policy values,
-signatures, timestamps, nested identity, or security evidence fail the
-candidate rather than producing an unsigned release. See
+Signed Windows publication requires a configured signing provider and its exact
+publisher subject. Missing credentials, policy values, signatures, timestamps,
+nested identity, or security evidence fail the signed candidate. The documented
+unsigned mode must be selected explicitly; it never follows automatically from
+a signing failure. See
 [WINDOWS_CODE_SIGNING_POLICY.md](WINDOWS_CODE_SIGNING_POLICY.md) and
 [SECURITY.md](SECURITY.md) for verification and false-positive reporting.
 
@@ -1100,12 +1232,29 @@ candidate rather than producing an unsigned release. See
 
 - Only browser traffic is proxied -- system networking is never modified
 - The proxy binds to `127.0.0.1` only (not exposed to the network)
-- When the extension is disabled or the service worker suspends, proxy settings are cleared to `DIRECT`
-- The loopback proxy is unauthenticated; on a multi-user machine, another local process/user that discovers its random port could use that browser profile's tailnet access
+- Suspending Chrome's MV3 worker does not clear Tailchrome's mandatory PAC.
+  Chrome removes its proxy setting only when Tailchrome's effective policy
+  becomes `direct`, immediately for an explicit routing release or after a
+  requested disconnect is confirmed. Firefox keeps its `proxy.onRequest`
+  listener installed and returns `direct` in that mode
+- If an already protected route loses the helper, its authentication session,
+  or its selected exit node, protected requests remain fail-closed (while
+  split-tunnel exceptions remain direct) instead of falling through
+- HTTP and SOCKS5 proxy connections require credentials generated for the helper process and delivered to the extension through native messaging
 
-### Web Client CSRF
+### Web Client Authorization
 
-Requests to the Tailscale web client (`100.100.100.100`) include a `Sec-Tailscale: browser-ext` header for CSRF protection.
+The Tailscale web client (`100.100.100.100`) checks its management session and
+the viewer's capabilities independently of proxy authentication. Mutating web
+requests retain Tailscale's same-origin checks using `Sec-Fetch-Site` or
+`Origin`. The `Sec-Tailscale: browser-ext` header does not replace those checks.
+
+Web logout and native account changes stop new web requests and drain active
+handlers before changing identity. An authorized web logout clears the old
+profile's cached state and web authorization at the LocalAPI boundary, before
+logout executes. The host serializes this operation with native commands and
+shutdown; a browser disconnect does not release the gate while a submitted
+mutation is still running.
 
 ### Native Messaging
 
@@ -1121,16 +1270,16 @@ Native messaging is restricted to the declared extension IDs in the native host 
 | Data                                      | Where                   | Purpose                                                            |
 | ----------------------------------------- | ----------------------- | ------------------------------------------------------------------ |
 | `profileId`                               | Browser local storage   | Per-profile Tailscale node isolation                               |
-| `lastExitNodeID`                          | Browser local storage   | Exit node restoration                                              |
 | `customUrls`                              | Browser local storage   | Custom per-device URLs                                             |
 | `domainSplitConfig`                       | Browser local storage   | Split-tunneling mode and domain list (entered by the user)         |
 | `autoConnectOnStart`                      | Browser local storage   | "Auto-connect on start" preference (off by default)                |
 | `uiSurface`                               | Browser local storage   | Popup versus side-panel/sidebar preference                          |
 | `autoConnectHandled`                      | Browser session storage | Per-session flag to honor an explicit manual disconnect            |
 | `desiredWantRunning`                      | Browser session storage | Per-session helper startup intent                                   |
+| `lastSessionWantRunning`                  | Browser local storage   | Temporary update/reload fallback for connection intent; cleared on browser startup |
 | `helperActivationRetry`                   | Browser session storage | Pending package/fallback discovery retry deadline                   |
 | `helperRegistrationRepairAvailable`       | Browser session storage | Session-scoped registration-repair promotion                        |
-| `proxyConfig`                             | Firefox session storage | Proxy state restoration after suspension                           |
+| `routingProtectionV1`                     | Browser local storage   | Sanitized account-scoped routing snapshots and transition state; excludes helper ports and credentials |
 | `~/.config/tailscale-browser-ext/<UUID>/` | Filesystem              | tsnet state directory (keys, config)                               |
 
 
@@ -1178,7 +1327,7 @@ Full policy: [docs/privacy-policy.md](privacy-policy.md)
 - **Listing status:** Published on [Firefox Add-ons (AMO)](https://addons.mozilla.org/firefox/addon/tailchrome/).
 - **Categories:** Privacy & Security, Other
 - **Addon ID:** `tailchrome@tesseras.org`
-- **Minimum Firefox version:** 140.0
+- **Minimum Firefox version:** 142.0
 - **Source code disclosure:** `firefox-sources.zip` included with each release for AMO reviewer verification
 
 Full listing text: [STORE_LISTING.md](STORE_LISTING.md)

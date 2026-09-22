@@ -36,19 +36,19 @@
     <CustomAction
       Id="InstallNativeHost"
       FileRef="HelperExe"
-      ExeCommand="-install-now"
+      ExeCommand="install --binary-path &quot;[#HelperExe]&quot;"
       Execute="deferred"
       Impersonate="yes"
       Return="check" />
 
-    <!-- The MSI only tracks the staged exe; -install-now writes the runtime
-         copy and HKCU registrations outside the MSI's file/registry tables,
-         so uninstall must deregister them explicitly. Skipped during major
-         upgrades, where the new version rewrites the registrations anyway. -->
+    <!-- Register the MSI-owned payload directly. Uninstall is ownership-aware
+         and only removes registrations pointing at this exact package path.
+         It is skipped during major upgrades, where the new version rewrites
+         the registrations anyway. -->
     <CustomAction
       Id="UninstallNativeHost"
       FileRef="HelperExe"
-      ExeCommand="-uninstall"
+      ExeCommand="uninstall --binary-path &quot;[#HelperExe]&quot;"
       Execute="deferred"
       Impersonate="yes"
       Return="ignore" />

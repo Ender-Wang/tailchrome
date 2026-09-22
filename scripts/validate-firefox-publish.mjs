@@ -35,7 +35,7 @@ const firefoxSourcesZip = resolve(
 const extensionIds = JSON.parse(
   await readFile(resolve(root, "config/extension-ids.json"), "utf8"),
 );
-const expectedMinVersion = "140.0";
+const expectedMinVersion = "142.0";
 const approvedRequiredCategories = ["browsingActivity", "websiteContent"];
 
 await assertExists(firefoxZip, "Firefox ZIP");

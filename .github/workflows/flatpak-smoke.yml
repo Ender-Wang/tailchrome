@@ -1,0 +1,41 @@
+name: Chrome Flatpak helper smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox-helper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: host/go.mod
+          cache-dependency-path: host/go.sum
+      - name: Prepare a clean Chrome Flatpak installation
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes flatpak dbus-x11
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive --assumeyes flathub com.google.Chrome
+          # The smoke script intentionally refuses to touch an app instance it
+          # did not start. Seed only the clean config directory it needs; the
+          # helper launch below is the first process started in the sandbox.
+          install -d -m 700 "$HOME/.var/app/com.google.Chrome/config/google-chrome"
+      - name: Verify helper framing inside the sandbox
+        run: dbus-run-session -- bash scripts/test-flatpak.sh
+      - name: Retain smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: flatpak-helper-smoke-log
+          path: .context/flatpak-smoke.log
+          include-hidden-files: true
+          if-no-files-found: warn

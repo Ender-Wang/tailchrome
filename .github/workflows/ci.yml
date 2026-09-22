@@ -39,6 +39,8 @@ jobs:
               - 'packaging/**'
               - 'scripts/install.sh'
               - 'scripts/install.test.sh'
+              - 'scripts/install.ps1'
+              - 'scripts/install.test.ps1'
               - 'scripts/initialize-windows-defender.ps1'
               - 'scripts/verify-windows-signatures.ps1'
               - 'scripts/verify-windows-signatures.test.ps1'
@@ -82,7 +84,21 @@ jobs:
           package-manager-cache: false
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - run: pnpm e2e:chrome
+      - name: Run Chrome E2E smoke tests
+        env:
+          KEEP_E2E_ARTIFACTS: "true"
+          TMPDIR: ${{ runner.temp }}/tailchrome-e2e
+        shell: bash
+        run: |
+          mkdir -p "$TMPDIR"
+          pnpm e2e:chrome 2>&1 | tee "$TMPDIR/output.log"
+      - name: Preserve failed Chrome E2E artifacts
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: chrome-e2e-failure
+          path: ${{ runner.temp }}/tailchrome-e2e/
+          retention-days: 14
 
   build-chrome:
     runs-on: ubuntu-latest
@@ -146,7 +162,7 @@ jobs:
 
   host-windows-tests:
     needs: changes
-    if: needs.changes.outputs.host == 'true'
+    if: needs.changes.outputs.packaging == 'true'
     runs-on: windows-2025
     timeout-minutes: 15
     steps:
@@ -157,6 +173,62 @@ jobs:
           cache-dependency-path: host/go.sum
       - run: go test ./...
         working-directory: host
+      - name: Run Windows bootstrap installer tests with pwsh
+        shell: pwsh
+        env:
+          TAILCHROME_EXPECTED_NATIVE_ARCHITECTURE: amd64
+        run: |
+          $ErrorActionPreference = "Stop"
+          & pwsh -NoProfile -NonInteractive -File .\scripts\install.test.ps1
+          if ($LASTEXITCODE -ne 0) {
+            throw "PowerShell Core installer tests exited with $LASTEXITCODE."
+          }
+      - name: Run Windows bootstrap installer tests with stock PowerShell 5.1
+        shell: pwsh
+        env:
+          TAILCHROME_EXPECTED_NATIVE_ARCHITECTURE: amd64
+        run: |
+          $ErrorActionPreference = "Stop"
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+            -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+            -File .\scripts\install.test.ps1
+          if ($LASTEXITCODE -ne 0) {
+            throw "Stock Windows PowerShell 5.1 installer tests exited with $LASTEXITCODE."
+          }
+
+  windows-arm64-smoke:
+    needs: changes
+    if: needs.changes.outputs.packaging == 'true'
+    runs-on: windows-11-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: host/go.mod
+          cache-dependency-path: host/go.sum
+      - run: go mod download
+        working-directory: host
+      - name: Build and execute the native ARM64 helper
+        shell: pwsh
+        run: |
+          if ($env:PROCESSOR_ARCHITECTURE -ne "ARM64") {
+            throw "The ARM64 smoke test must run on a native ARM64 Windows runner; observed $env:PROCESSOR_ARCHITECTURE."
+          }
+          make host-windows-arm64
+          if ($LASTEXITCODE -ne 0) {
+            throw "The ARM64 cross-build exited with $LASTEXITCODE."
+          }
+          $expectedVersion = (& git describe --tags --always --dirty).Trim()
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not determine the ARM64 smoke build version."
+          }
+          & .\packaging\windows\test-arm64-release.ps1 `
+            -HelperPath .\dist\tailscale-browser-ext-windows-arm64.exe `
+            -InstallerTestPath .\scripts\install.test.ps1 `
+            -ExpectedVersion $expectedVersion `
+            -ReleaseTag $expectedVersion `
+            -EvidencePath .\windows-arm64-smoke.json
 
   homebrew:
     needs: changes
@@ -318,6 +390,26 @@ jobs:
             $messages = @($errors | ForEach-Object { $_.Message })
             throw "Defender initialization script parse failed: $($messages -join '; ')"
           }
+      - name: Parse Windows bootstrap scripts
+        shell: pwsh
+        run: |
+          foreach ($path in @(
+            ".\scripts\install.ps1",
+            ".\scripts\install.test.ps1",
+            ".\packaging\windows\test-arm64-release.ps1"
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -ne 0) {
+              $messages = @($errors | ForEach-Object { $_.Message })
+              throw "Bootstrap script parse failed for $path`: $($messages -join '; ')"
+            }
+          }
       - name: Run Windows signature verifier tests
         shell: pwsh
         run: pwsh -NoProfile -File .\scripts\verify-windows-signatures.test.ps1
@@ -340,6 +432,7 @@ jobs:
             koalaman/shellcheck:v0.11.0 \
             scripts/install.sh \
             scripts/install.test.sh \
+            scripts/test-flatpak.sh \
             packaging/linux/build-packages.sh \
             packaging/macos/build-pkg.sh \
             packaging/macos/test-user-app.sh \

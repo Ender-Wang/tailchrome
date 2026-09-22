@@ -95,11 +95,20 @@ func (h *Host) handleDeleteProfile(profileID string) {
 		return
 	}
 
-	h.cancelStartupCorrection()
-	restartWatcher := h.beginProxyProfileChange(lc)
-	defer restartWatcher()
-
 	ctx := context.Background()
+	current, _, err := lc.ProfileStatus(ctx)
+	if err != nil {
+		h.sendError("delete-profile", fmt.Sprintf("failed to read current profile: %v", err))
+		return
+	}
+	// Deleting a saved profile does not change the active identity. Preserve
+	// its web authorization and watcher unless the current profile is removed.
+	if current.ID == ipn.ProfileID(profileID) {
+		h.cancelStartupCorrection()
+		restartWatcher := h.beginProxyProfileChange(lc)
+		defer restartWatcher()
+	}
+
 	if err := lc.DeleteProfile(ctx, ipn.ProfileID(profileID)); err != nil {
 		h.sendError("delete-profile", fmt.Sprintf("failed to delete profile: %v", err))
 		return

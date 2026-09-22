@@ -1,6 +1,6 @@
 {
   "name": "@tailchrome/shared",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -11,6 +11,6 @@
     "@types/chrome": "^0.2.2",
     "happy-dom": "^20.11.1",
     "typescript": "^5.7.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }

@@ -3,8 +3,8 @@
 Homebrew users on x86_64 or ARM64 can use the
 [Tailchrome formula](../homebrew/README.md#source-formula-macos-and-linux). It builds
 the helper from a checksummed release source archive using Homebrew's Go;
-browser registration is a separate per-user command that
-must also be run after upgrades.
+browser registration is a separate per-user command. Follow `brew info` for
+the command supported by its pinned release.
 
 `build-packages.sh` produces:
 
@@ -32,11 +32,19 @@ the per-user installer below.
 
 Use the release's `tailchrome-install.sh` to install or repair the helper for
 your account. The script selects `linux-amd64` or `linux-arm64` from the runtime
-architecture, verifies the raw helper, runs it with `-install-now`, and writes
-registration only for the current user.
+architecture, verifies the raw helper, places it at `~/.local/bin/tailchrome`,
+and registers that stable path using `install --binary-path`. These commands
+require v0.1.14 or later. Rerunning the installer also repairs registration.
 
-Pin the extension release version, download the installer and checksum file,
-verify them, inspect the script, and then execute it:
+The popup provides a version-pinned terminal command. To install the latest
+stable helper directly:
+
+```bash
+curl -fsSL https://github.com/dantraynor/tailchrome/releases/latest/download/tailchrome-install.sh | bash
+```
+
+To inspect the script before running it, choose a published release version,
+download its installer and checksum file, verify them, and execute it:
 
 ```bash
 VERSION=vX.Y.Z
@@ -62,24 +70,25 @@ chmod 755 tailchrome-install.sh
 
 The `gh` attestation check is optional when GitHub CLI is unavailable or not
 authenticated (`gh auth login`). In that case the installer prints a warning
-that its checksum and artifact share the same GitHub Release trust boundary. Do not pipe a remote script directly to a
-shell.
+that its checksum and artifact share the same GitHub Release trust boundary.
 
 The installed Linux helper path is:
 
 ```text
-$HOME/.local/share/tailscale/browser-ext/tailscale-browser-ext
+$HOME/.local/bin/tailchrome
 ```
 
 To remove the current-user helper and its manifests, use the same inspected
-script with the pinned version:
+script:
 
 ```bash
-./tailchrome-install.sh --version "$VERSION" --uninstall
+./tailchrome-install.sh --uninstall
 ```
 
-This invokes the installed helper directly with `-uninstall`; it does not
-assume that `tailscale-browser-ext` is on `PATH`.
+This invokes `uninstall --binary-path` before removing the script-owned
+executable. It preserves node identities and registrations owned by another
+method. For custom XDG paths and Chrome Flatpak, see
+[helper installation](../../docs/helper-installation.md).
 
 ## Build
 

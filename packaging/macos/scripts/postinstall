@@ -22,6 +22,6 @@ fi
 
 echo "Registering Tailchrome native messaging hosts for $console_user..."
 /bin/launchctl asuser "$uid" /usr/bin/sudo -u "$console_user" \
-  /usr/bin/env HOME="$home_dir" "$BIN" -install-now
+  /usr/bin/env HOME="$home_dir" "$BIN" install --binary-path "$BIN"
 
 exit 0

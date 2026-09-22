@@ -6,18 +6,28 @@ import {
   waitForPopup,
   waitForRequest,
 } from "../assertions.mjs";
-import { makeControl, makeProfiles } from "../fixtures.mjs";
+import {
+  makeControl,
+  makeNeedsLoginState,
+  makeProfiles,
+  makeRunningState,
+} from "../fixtures.mjs";
 
 export const suite = "full";
 export const browsers = ["chrome", "firefox"];
 
 export const control = () =>
   makeControl({
+    allowRuntimeUpdates: true,
     commandReplies: {
       "switch-profile": {
         profiles: makeProfiles({
           current: { id: "profile-personal", name: "Personal" },
         }),
+      },
+      "new-profile": {
+        status: makeNeedsLoginState(),
+        profiles: makeProfiles({ current: { id: "", name: "" } }),
       },
     },
   });
@@ -65,6 +75,32 @@ export async function run({ openPopup, nativeHost }) {
       const row = document.querySelector(".setting-row-profile");
       return row?.textContent?.includes("Personal");
     });
+
+    await clickText(page, "Personal", ".setting-row-profile");
+    await clickText(page, "Add Profile", "button");
+    await waitForRequest(nativeHost, "new-profile");
+    await expectText(page, "Log in to Tailscale");
+
+    const profilesAfterLogin = makeProfiles({
+      current: { id: "profile-second", name: "Second account" },
+      profiles: [
+        { id: "profile-personal", name: "Personal" },
+        { id: "profile-second", name: "Second account" },
+      ],
+    });
+    nativeHost.clearRequests();
+    await page.evaluate(
+      ({ status, profiles }) =>
+        chrome.runtime.sendMessage({
+          tailchromeE2ENative: {
+            control: { profiles },
+            reply: { status },
+          },
+        }),
+      { status: makeRunningState(), profiles: profilesAfterLogin },
+    );
+    await waitForRequest(nativeHost, "list-profiles");
+    await expectText(page, "Second account");
   } finally {
     await page.close();
   }

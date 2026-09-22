@@ -17,11 +17,32 @@ pnpm e2e --grep=proxy       # Filter case names
 
 The default suite is `smoke`; pass `--suite=full` for the complete scenario set. Browser selection accepts `--browser=chrome`, `--browser=firefox`, `--chrome`, or `--firefox`.
 
-The Firefox runner installs the known-compatible `stable_152.0` build because
-Firefox 153 currently rejects WebDriver BiDi navigation to extension pages
-([Mozilla bug 1959376](https://bugzilla.mozilla.org/show_bug.cgi?id=1959376)).
+To test an unpacked release artifact without rebuilding it, set
+`E2E_EXTENSION_DIR` to its directory. Relative paths resolve from the repository
+root. Use the matching browser for each artifact:
+
+```bash
+E2E_EXTENSION_DIR=.context/candidate/chrome pnpm e2e:full:chrome
+E2E_EXTENSION_DIR=.context/candidate/firefox pnpm e2e:full:firefox
+```
+
+The runner still copies the extension into each case's temporary directory
+before injecting the native-messaging mock; the supplied artifact is unchanged.
+
+The Firefox runner installs the verified `stable_156.0` build. Its isolated
+test profile enables `--remote-allow-system-access`, which Firefox requires
+for WebDriver BiDi navigation to extension pages. This grants the local
+automation client privileged browser access only for the test process; it
+does not change the packaged extension or the user's browser profile.
+See [Mozilla's remote protocol documentation](https://firefox-source-docs.mozilla.org/remote/Prefs.html).
 Set `FIREFOX_BUILD_ID` to test another downloadable build or `FIREFOX_BINARY`
 to use an existing Firefox executable.
+
+Current Firefox also rejects BiDi keyboard actions on extension pages. When
+that exact protocol error occurs, input helpers set the DOM field value and
+dispatch its `input` event; all subsequent UI and native-request assertions
+still run. The runner logs each fallback. These cases verify input handling,
+but physical keyboard interaction still requires a manual browser check.
 
 Passing a pull-request number is supported for local review runs. That mode requires a clean worktree, checks out the requested PR with `gh`, runs the suite, and restores the original branch afterward.
 

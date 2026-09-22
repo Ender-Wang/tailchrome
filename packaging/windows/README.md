@@ -2,15 +2,32 @@
 
 `build-msi.ps1` produces `dist/tailchrome-helper-windows-x64.msi`.
 
-The MSI is per-user. It installs a staged helper executable at:
+The x64 MSI is per-user. Starting in v0.1.14, it owns and registers this
+executable directly:
 
 ```text
 %LOCALAPPDATA%\Tailscale\BrowserExt\installer\tailscale-browser-ext.exe
 ```
 
-After files are installed, the MSI runs that staged executable with `-install-now`. The Go installer then copies the browser-launched helper to `%LOCALAPPDATA%\Tailscale\BrowserExt\tailscale-browser-ext.exe` and writes HKCU native messaging registrations for supported Chromium-family browsers and Firefox.
+After installation, the MSI invokes `install --binary-path` for its payload,
+writing current-user manifests and HKCU native messaging registrations. It
+makes no separate runtime copy. Uninstall invokes the ownership-aware
+`uninstall --binary-path` before Windows Installer removes its files. Major
+upgrades skip deregistration and replace the package payload.
 
-On uninstall, the MSI runs the staged executable with `-uninstall` to remove those manifests, HKCU registrations, and normally the runtime executable. If a browser still has a runtime or moved-aside update executable open, the file may remain on disk but is inert once deregistered. Before uninstall, the new helper retries moved-aside sidecar cleanup on each launch after the old process exits; no administrator-only reboot cleanup is required. Major upgrades skip deregistration; the new version rewrites the registrations instead.
+The PowerShell bootstrap supports native amd64 and ARM64 Windows. Download
+`tailchrome-install.ps1` from the chosen release and run:
+
+```powershell
+& .\tailchrome-install.ps1 -Version v0.1.14
+```
+
+It installs `%LOCALAPPDATA%\Tailchrome\tailchrome.exe`, verifies checksums and
+available attestation, and requires a valid Authenticode signature. Explicitly
+unsigned releases require `-AllowUnsigned`; invalid signatures still fail.
+Close browsers before upgrading. The script refuses a mapped executable and
+preserves the previous helper if replacement or registration fails. See
+[helper installation](../../docs/helper-installation.md).
 
 ## Build
 
@@ -24,7 +41,7 @@ Then build from the repository root:
 
 ```powershell
 .\packaging\windows\build-msi.ps1 `
-  -Version v0.1.13 `
+  -Version v0.1.14 `
   -AllowUnsignedDevelopmentBuild
 ```
 
@@ -33,16 +50,16 @@ not eligible for release.
 
 ## Release signing
 
-Windows publication is disabled until
-[WINDOWS_CODE_SIGNING_POLICY.md](../../docs/WINDOWS_CODE_SIGNING_POLICY.md)
-records one accepted signing provider and the exact stable Authenticode signer
-subject. A release cannot skip signing, fall back to a certificate file, or
-switch provider through a workflow input.
+Signed releases follow
+[WINDOWS_CODE_SIGNING_POLICY.md](../../docs/WINDOWS_CODE_SIGNING_POLICY.md),
+including its configured provider and exact publisher subject. The policy
+also permits a separately selected unsigned release mode; failed signing never
+silently selects that mode.
 
 The release order is:
 
-1. Sign and timestamp `tailscale-browser-ext-windows-amd64.exe`.
-2. Verify its Authenticode chain, SHA-256 digest, timestamp, and exact subject.
+1. Sign and timestamp both `tailscale-browser-ext-windows-amd64.exe` and `tailscale-browser-ext-windows-arm64.exe`.
+2. Verify their Authenticode chains, SHA-256 digests, timestamps, and exact subjects.
 3. Build the unsigned outer MSI from that exact signed EXE:
 
    ```powershell
@@ -55,11 +72,12 @@ The release order is:
    ```
 
 4. Sign and timestamp the outer MSI with the same publisher.
-5. Verify the final raw EXE, the MSI-embedded EXE, and the outer MSI:
+5. Verify both final raw EXEs, the amd64 MSI-embedded EXE, and the outer MSI:
 
    ```powershell
    .\scripts\verify-windows-signatures.ps1 `
      -RawExe .\signed-windows\tailscale-browser-ext-windows-amd64.exe `
+     -RawArm64Exe .\signed-windows\tailscale-browser-ext-windows-arm64.exe `
      -Msi .\signed-windows\tailchrome-helper-windows-x64.msi `
      -ExpectedSignerSubject $env:WINDOWS_EXPECTED_SIGNER_SUBJECT `
      -SignToolPath $env:WINDOWS_SIGNTOOL_PATH `
@@ -77,7 +95,7 @@ pwsh -NoProfile -File .\scripts\verify-windows-signatures.test.ps1 `
 
 ## Automated Defender gate
 
-The release workflow scans the final signed EXE and MSI on a single-use x64
+In signed mode, the release workflow scans both final raw EXEs and the MSI on a single-use x64
 Windows runner with the `self-hosted`, `Windows`, `X64`, and run-specific
 `tailchrome-defender-<run-id>` labels. The GitHub-hosted Windows images
 evaluated for this release run Defender in passive mode and are not accepted as
@@ -123,8 +141,10 @@ release.
 
 ## Architecture
 
-The helper is currently published for amd64. The x64 MSI is the supported
-Windows package on x64 and ARM64 Windows, where it runs under x64 emulation.
+v0.1.14 adds a native ARM64 raw helper through the PowerShell bootstrap. The
+x64 MSI remains available on ARM64 through emulation. Release candidate
+assembly requires native ARM64 smoke evidence for the exact final binary;
+cross-compilation does not satisfy that gate.
 
 ## Repair
 
@@ -136,7 +156,7 @@ PowerShell after downloading the MSI:
 powershell.exe -NoProfile -Command "msiexec.exe /fa (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads\tailchrome-helper-windows-x64.msi')"
 ```
 
-Repair reruns the embedded signed helper with `-install-now` for the current
+Repair reruns the embedded helper with `install --binary-path` for the current
 user. Tailchrome does not infer a Chromium product from browser strings; the
 helper's tested current-user registration table is authoritative.
 
@@ -163,9 +183,8 @@ Remove **Tailchrome Helper** from **Installed apps**, or run:
 msiexec.exe /x .\tailchrome-helper-windows-x64.msi
 ```
 
-The MSI invokes the staged helper with `-uninstall`, removing the supported
-HKCU native-messaging registrations and normally the runtime copy at:
-
-```text
-%LOCALAPPDATA%\Tailscale\BrowserExt\tailscale-browser-ext.exe
-```
+The MSI removes its registrations before removing its package-owned payload.
+For a script installation, use `& .\tailchrome-install.ps1 -Uninstall`.
+Neither path deletes node identities. Older uninstallers do not understand
+ownership receipts; remove them before switching methods or rerun the new
+registration afterward.

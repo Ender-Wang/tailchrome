@@ -5,8 +5,9 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 # hardcoded) so it tracks the pinned dependency automatically when it is bumped.
 TS_VERSION = $(shell cd host && go list -m -f '{{.Version}}' tailscale.com 2>/dev/null | sed 's/^v//')
 LDFLAGS = -ldflags "-X main.version=$(VERSION) -X tailscale.com/version.shortStamp=$(TS_VERSION) -X tailscale.com/version.longStamp=$(TS_VERSION)"
+GO_BUILD_FLAGS = -trimpath $(LDFLAGS)
 
-.PHONY: all extension extension-chrome extension-firefox host host-linux-amd64 host-linux-arm64 host-all macos-pkg windows-msi linux-packages clean dev zip zip-chrome zip-firefox
+.PHONY: all extension extension-chrome extension-firefox host host-linux-amd64 host-linux-arm64 host-windows-amd64 host-windows-arm64 host-all macos-pkg windows-msi linux-packages clean dev zip zip-chrome zip-firefox
 
 all: extension host
 
@@ -19,20 +20,27 @@ extension-firefox:
 	pnpm build:firefox
 
 host:
-	cd host && CGO_ENABLED=0 go build $(LDFLAGS) -o ../dist/tailscale-browser-ext .
+	cd host && CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o ../dist/tailscale-browser-ext .
 
 host-linux-amd64:
-	cd host && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o ../dist/tailscale-browser-ext-linux-amd64 .
+	cd host && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o ../dist/tailscale-browser-ext-linux-amd64 .
 
 host-linux-arm64:
-	cd host && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o ../dist/tailscale-browser-ext-linux-arm64 .
+	cd host && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o ../dist/tailscale-browser-ext-linux-arm64 .
+
+host-windows-amd64:
+	cd host && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o ../dist/tailscale-browser-ext-windows-amd64.exe .
+
+host-windows-arm64:
+	cd host && GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o ../dist/tailscale-browser-ext-windows-arm64.exe .
 
 host-all:
-	cd host && GOOS=darwin  GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o ../dist/tailscale-browser-ext-darwin-amd64 .
-	cd host && GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o ../dist/tailscale-browser-ext-darwin-arm64 .
-	cd host && GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o ../dist/tailscale-browser-ext-linux-amd64 .
-	cd host && GOOS=linux   GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o ../dist/tailscale-browser-ext-linux-arm64 .
-	cd host && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o ../dist/tailscale-browser-ext-windows-amd64.exe .
+	cd host && GOOS=darwin  GOARCH=amd64 CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o ../dist/tailscale-browser-ext-darwin-amd64 .
+	cd host && GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o ../dist/tailscale-browser-ext-darwin-arm64 .
+	cd host && GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o ../dist/tailscale-browser-ext-linux-amd64 .
+	cd host && GOOS=linux   GOARCH=arm64 CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o ../dist/tailscale-browser-ext-linux-arm64 .
+	cd host && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o ../dist/tailscale-browser-ext-windows-amd64.exe .
+	cd host && GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o ../dist/tailscale-browser-ext-windows-arm64.exe .
 
 # macOS only: universal system package and per-user app (requires Xcode tools)
 macos-pkg:

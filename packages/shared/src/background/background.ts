@@ -82,6 +82,8 @@ const LOGIN_ROUTING_TIMEOUT_NAME = "login-routing-timeout";
 // enough to observe them together when the update applied at browser launch.
 const UPDATE_RESTORE_SETTLE_MS = 250;
 const RUNTIME_LIFECYCLE_SETTLE_TIMER_NAME = "runtime-lifecycle-settle";
+const PROFILE_REFRESH_RETRY_TIMER_NAME = "profile-refresh-retry";
+const PROFILE_REFRESH_RETRY_DELAYS_MS = [1_000, 3_000, 10_000];
 
 /**
  * Returns true if `url` is a login URL we'll open in a tab. Always accepts the
@@ -506,6 +508,12 @@ export function initBackground(
   // Track whether we've attempted to restore exit node for this connection
   let exitNodeRestoreAttempted = false;
   let latestBackendState: TailscaleState["backendState"] | null = null;
+  // Login can replace even a populated profile (for example after logout or a
+  // server change). Keep the refresh pending until a request is sent after
+  // Running, including when a pre-login profile request is still in flight.
+  let profileRefreshNeeded = false;
+  let profileRefreshInFlight = false;
+  let profileRefreshRetryIndex = 0;
   let sawHealthyProcRunning = false;
   let sawHealthyInit = false;
   let helperRetryRecord: HelperRetryRecord | null = null;
@@ -514,6 +522,52 @@ export function initBackground(
   // change is committed — never optimistically, since the host can roll a
   // switch back. `undefined` means no status has established a baseline yet.
   let lastConfirmedControlURL: string | undefined;
+
+  function resetProfileRefreshRetry(): void {
+    profileRefreshRetryIndex = 0;
+    timerService.clear(PROFILE_REFRESH_RETRY_TIMER_NAME);
+  }
+
+  function scheduleProfileRefreshRetry(): void {
+    if (
+      latestBackendState !== "Running" ||
+      profileRefreshInFlight ||
+      !profileRefreshNeeded ||
+      profileRefreshRetryIndex >= PROFILE_REFRESH_RETRY_DELAYS_MS.length
+    ) {
+      return;
+    }
+    const delayMs = PROFILE_REFRESH_RETRY_DELAYS_MS[profileRefreshRetryIndex++]!;
+    timerService.setTimeout(
+      PROFILE_REFRESH_RETRY_TIMER_NAME,
+      () => {
+        if (
+          latestBackendState === "Running" &&
+          profileRefreshNeeded &&
+          !profileRefreshInFlight
+        ) {
+          requestProfiles();
+        }
+      },
+      delayMs,
+    );
+  }
+
+  function markProfileRefreshNeeded(): void {
+    resetProfileRefreshRetry();
+    profileRefreshNeeded = true;
+  }
+
+  function requestProfiles(): void {
+    timerService.clear(PROFILE_REFRESH_RETRY_TIMER_NAME);
+    profileRefreshInFlight = nativeHost.send({ cmd: "list-profiles" });
+    if (profileRefreshInFlight && latestBackendState === "Running") {
+      profileRefreshNeeded = false;
+    } else if (!profileRefreshInFlight) {
+      profileRefreshNeeded = true;
+      scheduleProfileRefreshRetry();
+    }
+  }
 
   // Hydrate the auto-connect preference so the popup reflects it on first
   // render. If the first native status arrived before storage resolved, re-run
@@ -716,7 +770,7 @@ export function initBackground(
         maybeCompleteHelperRecovery();
         // Request initial status and profile list
         nativeHost.send({ cmd: "get-status" });
-        nativeHost.send({ cmd: "list-profiles" });
+        requestProfiles();
       }
     }
 
@@ -727,6 +781,10 @@ export function initBackground(
 
     // Status update
     if (msg.status) {
+      if (msg.status.backendState === "NeedsLogin") {
+        if (latestBackendState !== "NeedsLogin") resetProfileRefreshRetry();
+        profileRefreshNeeded = true;
+      }
       latestBackendState = msg.status.backendState;
       routing.confirmStatus(msg.status, store.getState());
       store.applyStatusUpdate(msg.status);
@@ -742,8 +800,17 @@ export function initBackground(
         controlServerChanged(confirmedControlURL, lastConfirmedControlURL)
       ) {
         lastConfirmedControlURL = confirmedControlURL;
+        markProfileRefreshNeeded();
         exitNodeRestoreAttempted = false;
         void chrome.storage.local.remove("lastExitNodeID");
+      }
+
+      if (
+        msg.status.backendState === "Running" &&
+        (profileRefreshNeeded || !store.getState().currentProfile?.id) &&
+        !profileRefreshInFlight
+      ) {
+        requestProfiles();
       }
 
       const loginURL = loginURLFromStatus(msg.status);
@@ -789,10 +856,25 @@ export function initBackground(
 
     // Profiles result
     if (msg.profiles) {
+      profileRefreshInFlight = false;
       store.update({
         currentProfile: msg.profiles.current,
         profiles: msg.profiles.profiles,
       });
+      // A response to a request sent before login must not consume a refresh
+      // scheduled during login. Issue it now if Running arrived first.
+      const refreshAfterReply = profileRefreshNeeded && latestBackendState === "Running";
+      if (msg.profiles.current.id === "" || latestBackendState === "NeedsLogin") {
+        profileRefreshNeeded = true;
+      }
+      if (refreshAfterReply) {
+        resetProfileRefreshRetry();
+        requestProfiles();
+      } else if (profileRefreshNeeded) {
+        scheduleProfileRefreshRetry();
+      } else {
+        resetProfileRefreshRetry();
+      }
     }
 
     // Exit node suggestion — store in state, do NOT auto-apply.
@@ -835,6 +917,11 @@ export function initBackground(
 
     // Error from native host
     if (msg.error) {
+      if (msg.error.cmd === "list-profiles") {
+        profileRefreshNeeded = true;
+        profileRefreshInFlight = false;
+        scheduleProfileRefreshRetry();
+      }
       // Errors carry no request ID, so an older failure must not release a
       // newer account transition. Wait for a confirmed account or user release.
       const safeCommand = /^[a-z][a-z0-9-]{0,48}$/.test(msg.error.cmd)
@@ -903,6 +990,8 @@ export function initBackground(
     autoDisconnectAttempted = false;
     sawHealthyProcRunning = false;
     sawHealthyInit = false;
+    profileRefreshInFlight = false;
+    resetProfileRefreshRetry();
     clearPendingLoginOpen();
 
     const currentState = store.getState();
@@ -1414,6 +1503,7 @@ export function initBackground(
       }
 
       case "logout": {
+        markProfileRefreshNeeded();
         routing.requestDisconnect();
         recordIntent(false);
         nativeHost.send({ cmd: "logout" });
@@ -1475,7 +1565,8 @@ export function initBackground(
           // *confirms* the change (see the status handler) rather than here, so
           // a rolled-back switch doesn't permanently lose it.
           if (controlServerChanged(msg.value, state.prefs?.controlURL)) {
-            routing.switchProfile();
+            markProfileRefreshNeeded();
+            routing.switchProfile(state);
             store.update({ browseToURL: "" });
           }
         }
@@ -1488,8 +1579,11 @@ export function initBackground(
 
       case "switch-profile": {
         if (msg.profileID === state.currentProfile?.id) break;
+        resetProfileRefreshRetry();
+        profileRefreshNeeded = false;
+        profileRefreshInFlight = false;
         exitNodeRestoreAttempted = false;
-        routing.switchProfile();
+        routing.switchProfile(state);
         store.update({ routingHealth: { status: "blocked", message: "Switching accounts — browsing is blocked." } });
         clearIntent();
         nativeHost.send({ cmd: "switch-profile", profileID: msg.profileID });
@@ -1497,8 +1591,10 @@ export function initBackground(
       }
 
       case "new-profile": {
+        markProfileRefreshNeeded();
+        profileRefreshInFlight = false;
         exitNodeRestoreAttempted = false;
-        routing.switchProfile();
+        routing.switchProfile(state);
         store.update({ routingHealth: { status: "blocked", message: "Switching accounts — browsing is blocked." } });
         clearIntent();
         nativeHost.send({ cmd: "new-profile" });
@@ -1510,7 +1606,7 @@ export function initBackground(
         // another profile leaves the current decision in force.
         if (state.currentProfile?.id === msg.profileID) {
           exitNodeRestoreAttempted = false;
-          routing.switchProfile();
+          routing.switchProfile(state);
           store.update({ routingHealth: { status: "blocked", message: "Switching accounts — browsing is blocked." } });
           clearIntent();
         }

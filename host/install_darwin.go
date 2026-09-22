@@ -43,11 +43,19 @@ func binaryInstallDir() string {
 	return filepath.Join(home, "Library", "Application Support", "Tailscale", "BrowserExt")
 }
 
-// platformUninstall performs macOS-specific uninstall steps.
-// On macOS there are no additional steps beyond removing manifest files.
-func platformUninstall() error {
+// macOS has no registry cleanup beyond removing manifest files.
+func platformUninstallChromium(_ chromiumBrowserTarget, _ string) error {
 	return nil
 }
+
+func platformUninstallFirefox(_ string) error { return nil }
+
+func snapshotPlatformChromium(_ chromiumBrowserTarget, _ string) (any, error) { return nil, nil }
+func restorePlatformChromium(_ chromiumBrowserTarget, _ string, _ any) error  { return nil }
+func snapshotPlatformFirefox(_ string) (any, error)                           { return nil, nil }
+func restorePlatformFirefox(_ string, _ any) error                            { return nil }
+func platformChromiumRegistryKeys(_ chromiumBrowserTarget) []string           { return nil }
+func platformFirefoxRegistryKeys() []string                                   { return nil }
 
 // platformPostInstallChromium is the per-browser hook used by the new
 // installChromiumFamily loop. No-op on macOS.
@@ -57,8 +65,8 @@ func platformPostInstallChromium(_ string, _ string) error { return nil }
 // the named browser has ever run — either its config dir exists (Linux/macOS)
 // or its vendor registry key exists (Windows). Used to label install status.
 func browserHasFootprint(target chromiumBrowserTarget) bool {
-	_, err := os.Stat(filepath.Dir(target.Dir))
-	return err == nil
+	info, err := os.Stat(filepath.Dir(target.Dir))
+	return err == nil && info.IsDir()
 }
 
 func platformPostInstallFirefox(_ string) error { return nil }
@@ -66,5 +74,5 @@ func platformPostInstallFirefox(_ string) error { return nil }
 // replaceBinary installs the new host binary at destPath. A running executable
 // can be overwritten in place on this platform, so this is a straight copy.
 func replaceBinary(destPath string, src io.Reader, perm os.FileMode) error {
-	return copyFile(destPath, src, perm)
+	return atomicReplaceBinary(destPath, src, perm)
 }

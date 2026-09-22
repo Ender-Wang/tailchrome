@@ -95,12 +95,35 @@ export async function clickHeaderToggle(page) {
 }
 
 export async function setInputValue(page, selector, value) {
-  await page.waitForSelector(selector);
+  await page.waitForSelector(selector, { visible: true });
   await page.focus(selector);
-  await page.keyboard.down(process.platform === "darwin" ? "Meta" : "Control");
-  await page.keyboard.press("A");
-  await page.keyboard.up(process.platform === "darwin" ? "Meta" : "Control");
-  await page.keyboard.type(value);
+  try {
+    await page.keyboard.down(process.platform === "darwin" ? "Meta" : "Control");
+    await page.keyboard.press("A");
+    await page.keyboard.up(process.platform === "darwin" ? "Meta" : "Control");
+    await page.keyboard.type(value);
+  } catch (err) {
+    if (
+      !err.message?.includes("input.performActions") ||
+      !err.message.includes("does not support browsing contexts in privileged scope") ||
+      await page.evaluate(() => location.protocol) !== "moz-extension:"
+    ) {
+      throw err;
+    }
+    // Current Firefox permits extension-page evaluation but rejects BiDi
+    // keyboard actions there. Read the actual location above because missing
+    // BiDi navigation events can leave page.url() stale at about:blank.
+    // Exercise the input handlers and retain all subsequent assertions.
+    console.log(`    Firefox BiDi keyboard unavailable; using DOM input for ${selector}`);
+    await page.evaluate(({ selector, value }) => {
+      const input = document.querySelector(selector);
+      if (!(input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)) {
+        throw new Error(`Expected an input or textarea: ${selector}`);
+      }
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }, { selector, value });
+  }
 }
 
 export async function expectTextIn(page, selector, expected) {

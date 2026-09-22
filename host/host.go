@@ -8,10 +8,10 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/netip"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -39,6 +39,11 @@ type Host struct {
 
 	mu sync.Mutex // protects writes to stdout
 
+	// commandMu serializes the native dispatcher with web logout and shutdown.
+	// Besides account transitions, this protects dispatcher-owned startup
+	// correction state from concurrent web requests.
+	commandMu sync.Mutex
+
 	// sessionMu protects the active tsnet server, local client, watcher, and
 	// browser profile identity as one atomic session.
 	sessionMu         sync.RWMutex
@@ -56,9 +61,9 @@ type Host struct {
 	watchCancel context.CancelFunc
 
 	// correctionCancel stops the async retries of the startup
-	// WantRunning=false correction. Only touched from the dispatch goroutine;
-	// an explicit run-state command cancels it first so a stale retry can
-	// never override what the user just asked for.
+	// WantRunning=false correction. Touched only while commandMu is held by the
+	// native dispatcher, web logout, or shutdown; an explicit run-state command
+	// cancels it first so a stale retry can never override what the user asked.
 	correctionCancel context.CancelFunc
 	correctionDone   <-chan struct{}
 
@@ -77,8 +82,13 @@ type Host struct {
 	activeTransfers  map[uint64]context.CancelFunc
 	nextTransferID   uint64
 
-	webMu    sync.Mutex
-	webCache *webServerCache
+	// webMu protects cached authorization and request admission. Transitions
+	// stop admission and drain webRequests before replacing the active identity.
+	webMu       sync.Mutex
+	webCache    *webServerCache
+	webChanging bool
+	webActive   map[*http.Request]func()
+	webRequests sync.WaitGroup
 
 	proxyAuth     *ProxyAuth
 	proxyListener net.Listener
@@ -304,6 +314,12 @@ func normalizedURLHost(u *url.URL) string {
 
 // handleRequest dispatches a request to the appropriate handler based on the cmd field.
 func (h *Host) handleRequest(req Request) {
+	h.commandMu.Lock()
+	defer h.commandMu.Unlock()
+	h.handleRequestLocked(req)
+}
+
+func (h *Host) handleRequestLocked(req Request) {
 	switch req.Cmd {
 	case "init":
 		h.handleInit(req)
@@ -376,6 +392,8 @@ func (h *Host) handleInit(req Request) {
 		})
 		return
 	}
+	finishWebChange := h.beginWebSessionChange()
+	defer finishWebChange()
 
 	// Atomically detach the old session before closing it so proxy and status
 	// goroutines never race against partially replaced fields.
@@ -391,6 +409,7 @@ func (h *Host) handleInit(req Request) {
 	h.sessionMu.Unlock()
 
 	h.cancelStartupCorrection()
+	h.clearWebServer()
 	if oldWatchCancel != nil {
 		oldWatchCancel()
 	}
@@ -409,7 +428,14 @@ func (h *Host) handleInit(req Request) {
 		return
 	}
 
-	stateDir := filepath.Join(homeDir, ".config", "tailscale-browser-ext", req.InitID)
+	stateDir, err := hostStateDir(homeDir, req.InitID)
+	if err != nil {
+		h.send(Reply{
+			Cmd:  "init",
+			Init: &InitReply{Error: err.Error()},
+		})
+		return
+	}
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
 		h.send(Reply{
 			Cmd:  "init",
@@ -534,23 +560,24 @@ func (h *Host) startWantRunningFalseCorrection(lc *local.Client) {
 	}()
 }
 
-// correctionCancelGrace bounds how long an explicit run-state command waits
-// for an in-flight startup correction to finish. Overridden in tests.
+// correctionCancelGrace bounds how long a commandMu-serialized transition
+// waits for an in-flight startup correction to finish. Overridden in tests.
 var correctionCancelGrace = 2 * time.Second
 
-// cancelStartupCorrection stops any pending startup-correction retries. Must
-// run before an explicit run-state change is applied, on the same dispatch
-// goroutine that started the retries.
+// cancelStartupCorrection stops any pending startup-correction retries. The
+// caller must hold commandMu; this serializes native commands, web logout, and
+// shutdown while correction-owned fields are inspected and cleared. Call it
+// before an explicit run-state or account transition is applied.
 //
 // Stopping future retries alone does not establish ordering with an EditPrefs
 // call already in flight — localapi may keep processing a decoded request
 // after its client context is canceled — so wait briefly for the worker to
 // finish before issuing the explicit command. The wait is bounded: this runs
-// on the sole native-messaging dispatch goroutine, and blocking it forever on
-// a wedged local API would freeze every subsequent command with no recovery
-// path (the extension only reconnects on port death). In the worst case a
-// stale WantRunning=false lands after the user's `up`; that surfaces as a
-// visible Stopped state the user can re-toggle — recoverable, unlike a hang.
+// under commandMu, and blocking it forever on a wedged local API would freeze
+// every subsequent command or transition with no recovery path (the extension
+// only reconnects on port death). In the worst case a stale WantRunning=false
+// lands after the user's `up`; that surfaces as a visible Stopped state the
+// user can re-toggle — recoverable, unlike a hang.
 func (h *Host) cancelStartupCorrection() {
 	cancel := h.correctionCancel
 	done := h.correctionDone
@@ -914,8 +941,12 @@ func (h *Host) handleSetPrefs(req Request) {
 		return
 	}
 
-	if partial.WantRunning != nil {
+	if partial.WantRunning != nil || controlURLChanged {
 		h.cancelStartupCorrection()
+	}
+	if controlURLChanged {
+		finishProfileChange := h.beginProxyProfileChange(lc)
+		defer finishProfileChange()
 	}
 
 	updatedPrefs, err := lc.EditPrefs(ctx, mp)
@@ -1040,6 +1071,12 @@ func (h *Host) isCurrentSession(lc *local.Client, generation uint64) bool {
 }
 
 func (h *Host) shutdownSession() {
+	h.commandMu.Lock()
+	defer h.commandMu.Unlock()
+	h.cancelStartupCorrection()
+	finishWebChange := h.beginWebSessionChange()
+	defer finishWebChange()
+
 	h.sessionMu.Lock()
 	server := h.ts
 	cancelWatch := h.watchCancel
@@ -1049,6 +1086,7 @@ func (h *Host) shutdownSession() {
 	h.sessionGeneration++
 	h.sessionMu.Unlock()
 
+	h.clearWebServer()
 	if cancelWatch != nil {
 		cancelWatch()
 	}
