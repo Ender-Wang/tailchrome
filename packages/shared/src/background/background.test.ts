@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ProxyManager, TailscaleState, NativeReply, RoutingHealth } from "../types";
+import { makePeer } from "../__test__/fixtures";
 import {
   getHelperVersionNotice,
   initBackground,
@@ -2291,6 +2292,49 @@ describe("initBackground", () => {
       popupPort.onMessage._listeners[0]!({ type: "new-profile" });
 
       expect(nativePort.postMessage).toHaveBeenCalledWith({ cmd: "new-profile" });
+    });
+
+    it("restores routing when returning from an empty profile to the same saved account", async () => {
+      (chrome.storage.local.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+        profileId: "test-id", autoConnectOnStart: true,
+      });
+      await setupBackground();
+      advertiseLoginSupport();
+      sendNativeMessage({ init: {} });
+      const original: NonNullable<NativeReply["status"]> = {
+        backendState: "Running", running: true, needsLogin: false,
+        tailnet: "example.ts.net", magicDNSSuffix: "example.ts.net",
+        selfNode: { ...makePeer(), id: "saved-self", keyExpiry: null },
+        browseToURL: "", exitNode: null, peers: [], health: [], error: null,
+        prefs: { exitNodeID: "", exitNodeAllowLANAccess: false, corpDNS: true, shieldsUp: false },
+      };
+      const savedProfile = { id: "saved", name: "Original account" };
+      sendNativeMessage({ profiles: { current: savedProfile, profiles: [savedProfile] } });
+      sendNativeMessage({ status: original });
+      expect(proxyManager.apply).toHaveBeenLastCalledWith(expect.objectContaining({
+        routingPolicy: expect.objectContaining({ mode: "active" }),
+      }));
+      const popup = createPopupPort();
+      connectListeners[0]!(popup);
+      popup.onMessage._listeners[0]!({ type: "new-profile" });
+      sendNativeMessage({ status: original });
+      expect(proxyManager.apply).toHaveBeenLastCalledWith(expect.objectContaining({
+        routingPolicy: expect.objectContaining({ mode: "blocked", blockAll: true }),
+      }));
+      sendNativeMessage({ profiles: { current: { id: "", name: "" }, profiles: [savedProfile] } });
+      sendNativeMessage({ status: {
+        ...original, backendState: "NeedsLogin", running: false, needsLogin: true,
+        selfNode: null, prefs: null,
+      } });
+      popup.onMessage._listeners[0]!({ type: "switch-profile", profileID: savedProfile.id });
+      expect(proxyManager.apply).toHaveBeenLastCalledWith(expect.objectContaining({
+        routingPolicy: expect.objectContaining({ mode: "blocked", blockAll: true }),
+      }));
+      sendNativeMessage({ profiles: { current: savedProfile, profiles: [savedProfile] } });
+      sendNativeMessage({ status: original });
+      expect(proxyManager.apply).toHaveBeenLastCalledWith(expect.objectContaining({
+        routingPolicy: expect.objectContaining({ mode: "active", selectedExitNodeID: null }),
+      }));
     });
 
     it("does not duplicate the initial profile request when Running arrives first", async () => {

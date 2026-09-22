@@ -21,6 +21,7 @@ interface SavedRouting {
   profiles: Snapshot[];
   released?: boolean;
   transitioning?: boolean;
+  transitionScope?: string | null;
   pendingExit?: string | null;
   pendingDisconnect?: boolean;
   pendingLogin?: boolean;
@@ -147,6 +148,7 @@ export class RoutingProtection {
   private uncertain = false;
   private released = false;
   private transitioning = false;
+  private transitionScope: string | null = null;
   private pendingExit: string | null = null;
   private pendingDisconnect = false;
   private pendingLogin = false;
@@ -168,6 +170,12 @@ export class RoutingProtection {
         this.pendingLogin = this.released && saved.pendingLogin === true;
         this.transitioning = saved.transitioning === true;
         this.active = snapshot(saved.active);
+        // Older snapshots only tracked the last protected account. Retain
+        // that conservative transition boundary when no live source was saved.
+        this.transitionScope = saved.transitionScope === null ||
+          (typeof saved.transitionScope === "string" && saved.transitionScope.length <= 4096)
+          ? saved.transitionScope
+          : this.active?.scope ?? null;
         if (this.active) {
           this.pendingExit =
             typeof saved.pendingExit === "string" &&
@@ -212,12 +220,22 @@ export class RoutingProtection {
   isLoginPending(): boolean {
     return this.pendingLogin;
   }
-  switchProfile(): void {
+  switchProfile(state: TailscaleState): void {
     this.released = false;
     this.pendingLogin = false;
     this.pendingExit = null;
     this.pendingDisconnect = false;
     this.transitioning = true;
+    // An empty new profile has no protected snapshot of its own. A later
+    // switch back must compare against that live profile, not the saved account
+    // whose routes remain protected while switching. Incomplete status cannot
+    // establish an empty profile and keeps the last protected boundary.
+    this.transitionScope = state.selfNode?.id && state.prefs
+      ? JSON.stringify([state.prefs.controlURL || "", state.selfNode.id])
+      : state.backendState === "NeedsLogin" && !state.selfNode?.id &&
+          state.hostConnected && state.initialized
+        ? null
+        : this.active?.scope ?? null;
     this.save();
   }
   release(): void {
@@ -226,6 +244,7 @@ export class RoutingProtection {
   private releaseRouting(pendingLogin: boolean): void {
     this.revision += 1;
     this.transitioning = false;
+    this.transitionScope = null;
     this.uncertain = false;
     this.pendingExit = null;
     this.pendingDisconnect = false;
@@ -248,11 +267,14 @@ export class RoutingProtection {
       status.selfNode?.id && status.prefs
         ? JSON.stringify([status.prefs.controlURL || "", status.selfNode.id])
         : null;
+    if (incomingScope && incomingScope !== this.transitionScope) {
+      this.transitioning = false;
+      this.transitionScope = null;
+    }
     if (
       incomingScope &&
       (!this.active || incomingScope !== this.active.scope)
     ) {
-      this.transitioning = false;
       this.pendingExit = null;
       this.pendingDisconnect = false;
     }
@@ -361,6 +383,7 @@ export class RoutingProtection {
       active: this.active,
       released: this.released,
       transitioning: this.transitioning,
+      transitionScope: this.transitionScope,
       pendingExit: this.pendingExit,
       pendingDisconnect: this.pendingDisconnect,
       pendingLogin: this.pendingLogin,

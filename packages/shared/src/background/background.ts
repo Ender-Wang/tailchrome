@@ -1566,7 +1566,7 @@ export function initBackground(
           // a rolled-back switch doesn't permanently lose it.
           if (controlServerChanged(msg.value, state.prefs?.controlURL)) {
             markProfileRefreshNeeded();
-            routing.switchProfile();
+            routing.switchProfile(state);
             store.update({ browseToURL: "" });
           }
         }
@@ -1583,7 +1583,7 @@ export function initBackground(
         profileRefreshNeeded = false;
         profileRefreshInFlight = false;
         exitNodeRestoreAttempted = false;
-        routing.switchProfile();
+        routing.switchProfile(state);
         store.update({ routingHealth: { status: "blocked", message: "Switching accounts — browsing is blocked." } });
         clearIntent();
         nativeHost.send({ cmd: "switch-profile", profileID: msg.profileID });
@@ -1594,7 +1594,7 @@ export function initBackground(
         markProfileRefreshNeeded();
         profileRefreshInFlight = false;
         exitNodeRestoreAttempted = false;
-        routing.switchProfile();
+        routing.switchProfile(state);
         store.update({ routingHealth: { status: "blocked", message: "Switching accounts — browsing is blocked." } });
         clearIntent();
         nativeHost.send({ cmd: "new-profile" });
@@ -1606,7 +1606,7 @@ export function initBackground(
         // another profile leaves the current decision in force.
         if (state.currentProfile?.id === msg.profileID) {
           exitNodeRestoreAttempted = false;
-          routing.switchProfile();
+          routing.switchProfile(state);
           store.update({ routingHealth: { status: "blocked", message: "Switching accounts — browsing is blocked." } });
           clearIntent();
         }
