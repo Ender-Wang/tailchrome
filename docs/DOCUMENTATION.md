@@ -440,6 +440,12 @@ Chrome uses a dynamically generated PAC (Proxy Auto-Config) script set via `chro
 
 The Chrome PAC target is `PROXY 127.0.0.1:<port>`, with HTTP proxy authentication supplied by the background handler.
 
+Chrome [hides some browser-internal requests from extension request handlers](https://developer.chrome.com/docs/extensions/reference/api/webRequest#concepts_and_usage).
+When routed through the helper, those requests may fail proxy authentication;
+Tailchrome does not bypass authentication or protected routing to make them
+succeed. An individual tunnel failure does not by itself establish that the
+proxy settings or all protected browsing have failed.
+
 Successful PAC settings are reused until routing changes. Worker suspension preserves the browser settings; reconnecting replaces the helper endpoint after confirmation.
 
 ### Firefox: proxy.onRequest

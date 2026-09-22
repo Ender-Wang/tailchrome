@@ -63,6 +63,12 @@ export class ChromeProxyManager {
     });
     chrome.proxy.onProxyError.addListener((details) => {
       if (!this.desired) return;
+      if (details.fatal && details.error === "net::ERR_TUNNEL_CONNECTION_FAILED") {
+        // Chrome aborted one CONNECT request, not the installed proxy policy.
+        // Browser-internal requests can be hidden from our auth listener. Keep
+        // that request failed without latching a global routing-health failure.
+        return;
+      }
       this.errorKey = this.desiredKey;
       this.appliedKey = "";
       this.report({

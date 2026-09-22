@@ -505,7 +505,98 @@ describe("ChromeProxyManager", () => {
     );
   });
 
-  it("keeps proxy errors visible through reentrant state notifications", () => {
+  describe("request-level CONNECT errors", () => {
+    let manager: ChromeProxyManager;
+    let onError: (details: { error: string; details: string; fatal: boolean }) => void;
+
+    beforeEach(() => {
+      vi.spyOn(chrome.proxy.onProxyError, "addListener").mockImplementation(
+        (listener) => { onError = listener; },
+      );
+      manager = new ChromeProxyManager();
+      manager.setProxySession({ port: 1055, username: "fixture", password: "fixture-credential-".repeat(3) });
+      expect(onError).toBeTypeOf("function");
+    });
+
+    it("preserves a verified all-traffic route through reentrant state notifications", () => {
+      const state = baseState({
+        exitNode: { id: "exit", hostname: "exit", dnsName: "exit.example.ts.net", online: true, location: null },
+        domainSplit: { mode: "bypass", domains: [] },
+      });
+      const report = vi.fn();
+      let previousStatus = "";
+      manager.setRoutingHealthListener((health) => {
+        report(health);
+        if (previousStatus !== health.status) {
+          previousStatus = health.status;
+          manager.apply(state);
+        }
+      });
+      const set = vi.spyOn(chrome.proxy.settings, "set");
+      const clear = vi.spyOn(chrome.proxy.settings, "clear");
+      manager.apply(state);
+      const applied = structuredClone(set.mock.calls[0]![0].value);
+      expect(applied.pacScript?.mandatory).toBe(true);
+      expect(applied.pacScript?.data).toContain("PROXY 127.0.0.1:1055");
+      expect(applied.pacScript?.data).not.toContain('"DIRECT"');
+      expect(report).toHaveBeenLastCalledWith({ status: "active", message: "" });
+
+      onError({ error: "net::ERR_TUNNEL_CONNECTION_FAILED", details: "", fatal: true });
+      manager.apply(state);
+
+      expect(report.mock.calls.every(([health]) => health.status === "active")).toBe(true);
+      expect(report).toHaveBeenLastCalledWith({ status: "active", message: "" });
+      expect(set).toHaveBeenCalledTimes(1);
+      expect(set.mock.calls[0]![0].value).toEqual(applied);
+      expect(clear).not.toHaveBeenCalled();
+    });
+
+    it.each(["missing authentication", "blocked policy"] as const)(
+      "preserves the blocked route and explanation for %s",
+      (reason) => {
+        const state = reason === "blocked policy"
+          ? baseState({ prefs: { exitNodeID: "missing", corpDNS: true, shieldsUp: false, exitNodeAllowLANAccess: false } })
+          : baseState();
+        if (reason === "missing authentication") manager.setProxySession(null);
+        const report = vi.fn();
+        manager.setRoutingHealthListener(report);
+        const set = vi.spyOn(chrome.proxy.settings, "set");
+        const clear = vi.spyOn(chrome.proxy.settings, "clear");
+        manager.apply(state);
+        const originalHealth = report.mock.calls.at(-1)![0];
+        expect(originalHealth.status).toBe("blocked");
+        const applied = structuredClone(set.mock.calls[0]![0].value);
+        expect(applied.pacScript?.data).toContain("PROXY 127.0.0.1:1");
+        expect(applied.pacScript?.data).not.toContain("PROXY 127.0.0.1:1055");
+
+        onError({ error: "net::ERR_TUNNEL_CONNECTION_FAILED", details: "", fatal: true });
+        manager.apply(state);
+
+        expect(report).toHaveBeenLastCalledWith(originalHealth);
+        expect(set).toHaveBeenCalledTimes(1);
+        expect(set.mock.calls[0]![0].value).toEqual(applied);
+        expect(clear).not.toHaveBeenCalled();
+      },
+    );
+
+    it("keeps nonfatal tunnel errors visible because Chrome may fall back directly", () => {
+      const report = vi.fn();
+      manager.setRoutingHealthListener(report);
+      manager.apply(baseState());
+      onError({ error: "net::ERR_TUNNEL_CONNECTION_FAILED", details: "", fatal: false });
+      manager.apply(baseState());
+      expect(report).toHaveBeenLastCalledWith({
+        status: "unavailable",
+        message: "Browser routing failed. Traffic may use your normal connection.",
+      });
+    });
+  });
+
+  it.each([
+    "net::ERR_PROXY_CONNECTION_FAILED",
+    "net::ERR_MANDATORY_PROXY_CONFIGURATION_FAILED",
+    "unknown proxy error",
+  ])("keeps %s visible through reentrant state notifications", (error) => {
     let onError:
       | ((details: { error: string; details: string; fatal: boolean }) => void)
       | undefined;
@@ -522,7 +613,10 @@ describe("ChromeProxyManager", () => {
       if (health.status === "blocked") manager.apply(baseState());
     });
     manager.apply(baseState());
-    onError?.({ error: "connection failed", details: "", fatal: true });
+    onError?.({ error, details: "", fatal: true });
+    expect(reports.at(-1)).toBe("blocked");
+    onError?.({ error: "net::ERR_TUNNEL_CONNECTION_FAILED", details: "", fatal: true });
+    manager.apply(baseState());
     expect(reports.at(-1)).toBe("blocked");
   });
 
