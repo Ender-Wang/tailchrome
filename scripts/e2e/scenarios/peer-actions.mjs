@@ -51,7 +51,7 @@ export async function run({ openPopup, nativeHost, browserName }) {
       ];
       buttons.find((button) => button.textContent?.includes("Set URL"))?.click();
     });
-    await setInputValue(page, ".peer-url-input", "8443");
+    await setInputValue(page, '[data-peer-id="peer-laptop"] .peer-url-input', "8443");
     await page.evaluate(() => {
       const buttons = [
         ...document.querySelectorAll('[data-peer-id="peer-laptop"] button'),

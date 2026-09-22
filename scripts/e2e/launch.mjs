@@ -11,11 +11,8 @@ const { chromeExtensionId, firefoxAddonId } = JSON.parse(
 );
 
 const firefoxExtensionUuid = "6f0f1dbf-8f16-4c9b-a902-3e47e22d5d27";
-// Firefox 153 blocks WebDriver BiDi from navigating a regular tab to a
-// moz-extension URL (https://bugzilla.mozilla.org/show_bug.cgi?id=1959376).
-// Keep the suite reproducible on the latest compatible release until Firefox
-// exposes extension pages to BiDi.
-const defaultFirefoxBuildId = "stable_152.0";
+// Pin the verified stable release so local and CI runs use the same browser.
+const defaultFirefoxBuildId = "stable_156.0";
 
 function shCapture(command, args) {
   const result = spawnSync(command, args, {
@@ -141,6 +138,10 @@ async function launchFirefox(extensionDir, { firefoxPrefs = {} } = {}) {
     executablePath,
     headless,
     userDataDir,
+    // Firefox requires explicit privileged automation access to navigate to
+    // extension pages. This applies only to this isolated test profile.
+    // https://firefox-source-docs.mozilla.org/remote/Prefs.html
+    args: ["--remote-allow-system-access"],
     extraPrefsFirefox: {
       ...firefoxPrefs,
       "extensions.webextensions.uuids": JSON.stringify({

@@ -10,7 +10,7 @@
  *   HEADLESS=false pnpm e2e
  */
 import { execSync, spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { launch } from "./launch.mjs";
@@ -198,15 +198,19 @@ async function main() {
       console.log(`> Testing current branch: ${ref}`);
     }
 
-    console.log(`> pnpm build:${browserName}`);
-    sh(`pnpm build:${browserName}`);
+    const suppliedExtensionDir = process.env.E2E_EXTENSION_DIR;
+    const extensionDir = suppliedExtensionDir
+      ? resolve(repoRoot, suppliedExtensionDir)
+      : resolve(repoRoot, `packages/extension/.output/${browserName}-mv3`);
+    if (suppliedExtensionDir) {
+      console.log(`> Testing prebuilt extension: ${extensionDir}`);
+    } else {
+      console.log(`> pnpm build:${browserName}`);
+      sh(`pnpm build:${browserName}`);
+    }
 
-    const extensionDir = resolve(
-      repoRoot,
-      `packages/extension/.output/${browserName}-mv3`,
-    );
-    if (!existsSync(extensionDir)) {
-      throw new Error(`Built extension not found at ${extensionDir}`);
+    if (!existsSync(extensionDir) || !statSync(extensionDir).isDirectory()) {
+      throw new Error(`Extension directory not found at ${extensionDir}`);
     }
 
     const cases = await loadCases({ browserName, suite, grep });
