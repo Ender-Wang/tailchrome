@@ -142,6 +142,7 @@ export class ChromeProxyManager {
       return;
     if (this.appliedKey === this.desiredKey) {
       this.report(this.desiredHealth);
+      if (this.desiredHealth.status === "active") this.auth.prime();
       return;
     }
     this.inFlight = true;
@@ -206,7 +207,10 @@ export class ChromeProxyManager {
               return;
             }
             this.appliedKey = key;
-            if (key === this.desiredKey) this.report(this.desiredHealth);
+            if (key === this.desiredKey) {
+              this.report(this.desiredHealth);
+              if (this.desiredHealth.status === "active") this.auth.prime();
+            }
             this.inFlight = false;
             if (key !== this.desiredKey) this.flush();
           });

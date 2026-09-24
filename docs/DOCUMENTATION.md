@@ -438,13 +438,13 @@ Chrome uses a dynamically generated PAC (Proxy Auto-Config) script set via `chro
 2. **Other traffic with a selected exit node** -> proxy subject to the user's **Bypass** or **Only** domain rules; protected requests are blocked while the exit node or helper is unavailable.
 3. **Otherwise** -> `DIRECT`.
 
-The Chrome PAC target is `PROXY 127.0.0.1:<port>`, with HTTP proxy authentication supplied by the background handler.
+The Chrome PAC target is `PROXY 127.0.0.1:<port>`, with HTTP proxy authentication supplied by the background handler. After installing a new authenticated helper session, Tailchrome makes one harmless request to the local Tailscale service address. This populates Chromium's proxy-authentication cache so requests from other extensions can reuse the credential even though Chromium hides those requests from Tailchrome's handler.
 
-Chrome [hides some browser-internal requests from extension request handlers](https://developer.chrome.com/docs/extensions/reference/api/webRequest#concepts_and_usage).
-When routed through the helper, those requests may fail proxy authentication;
-Tailchrome does not bypass authentication or protected routing to make them
-succeed. An individual tunnel failure does not by itself establish that the
-proxy settings or all protected browsing have failed.
+Chromium [filters requests initiated by other extensions](https://chromium.googlesource.com/chromium/src/+/main/extensions/browser/api/web_request/extension_web_request_event_router.cc) and [hides some browser-internal requests from extension request handlers](https://developer.chrome.com/docs/extensions/reference/api/webRequest#concepts_and_usage).
+The initial cache handshake avoids that limitation without bypassing local
+proxy authentication or protected routing. An individual tunnel failure does
+not by itself establish that the proxy settings or all protected browsing have
+failed.
 
 Successful PAC settings are reused until routing changes. Worker suspension preserves the browser settings; reconnecting replaces the helper endpoint after confirmation.
 

@@ -107,6 +107,17 @@ function mockSource(baseUrl, initialControl) {
   // deterministic for every scenario.
   const control = ${JSON.stringify(initialControl)};
 
+  if (!control.enableRealProxyAuthProbe) {
+    const realFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = (input, init) => {
+      const url = typeof input === "string" ? input : input?.url;
+      if (url === "http://100.100.100.100/.well-known/tailchrome-proxy-auth") {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return realFetch(input, init);
+    };
+  }
+
   async function logRequest(msg) {
     await fetch(baseUrl + "/request", {
       method: "POST",

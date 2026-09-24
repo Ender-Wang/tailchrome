@@ -1,4 +1,6 @@
 import { createServer as createHTTPServer, request } from "node:http";
+import { createServer as createHTTPSServer } from "node:https";
+import { readFileSync } from "node:fs";
 import { createServer, createConnection } from "node:net";
 
 export const routingTestHost = "routing.tailchrome.test";
@@ -6,6 +8,11 @@ export const proxyCredentials = {
   version: 1,
   username: "fixture",
   password: "fixture-credential-".repeat(3),
+};
+
+const tls = {
+  key: readFileSync(new URL("fixtures/routing-test-key.fixture", import.meta.url)),
+  cert: readFileSync(new URL("fixtures/routing-test-cert.fixture", import.meta.url)),
 };
 
 function listen(server) {
@@ -19,6 +26,7 @@ function listen(server) {
 // fixture's origin is accepted as a proxy destination.
 export async function createRoutingNetwork() {
   const hits = [];
+  const proxyAttempts = [];
   const sockets = new Set();
   const forwardedPorts = new Set();
   const track = (socket) => {
@@ -27,17 +35,21 @@ export async function createRoutingNetwork() {
     socket.on("error", () => {});
     return socket;
   };
-  const origin = createHTTPServer((req, res) => {
+  const origin = createHTTPSServer(tls, (req, res) => {
     hits.push({
       path: req.url,
       proxied: forwardedPorts.has(req.socket.remotePort) || req.headers["x-tailchrome-test-proxy"] === "yes",
     });
-    res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+    res.writeHead(200, {
+      "Access-Control-Allow-Origin": "*",
+      "Content-Type": "text/plain",
+      "Cache-Control": "no-store",
+    });
     res.end("routing origin reached");
   });
   origin.on("connection", track);
   const originPort = await listen(origin);
-  const baseURL = `http://${routingTestHost}:${originPort}`;
+  const baseURL = `https://${routingTestHost}:${originPort}`;
   const allowedTarget = (host, port) => host === routingTestHost && Number(port) === originPort;
   const basic = `Basic ${Buffer.from(`${proxyCredentials.username}:${proxyCredentials.password}`).toString("base64")}`;
 
@@ -57,6 +69,7 @@ export async function createRoutingNetwork() {
   }
 
   const httpProxy = createHTTPServer((req, res) => {
+    proxyAttempts.push({ protocol: "http", authenticated: req.headers["proxy-authorization"] === basic, target: req.url });
     if (req.headers["proxy-authorization"] !== basic) {
       res.writeHead(407, { "Proxy-Authenticate": 'Basic realm="Tailchrome"' });
       res.end();
@@ -106,6 +119,7 @@ export async function createRoutingNetwork() {
           if (buffer.length < end) return;
           const valid = buffer.subarray(2, passwordOffset).toString() === proxyCredentials.username &&
             buffer.subarray(passwordOffset + 1, end).toString() === proxyCredentials.password;
+          proxyAttempts.push({ protocol: "socks5", authenticated: valid });
           client.write(Buffer.from([1, valid ? 0 : 1]));
           if (!valid) { client.end(); return; }
           buffer = buffer.subarray(end);
@@ -117,6 +131,7 @@ export async function createRoutingNetwork() {
           const end = 5 + buffer[4];
           if (buffer.length < end + 2) return;
           const host = buffer.subarray(5, end).toString();
+          proxyAttempts.push({ protocol: "socks5", target: `${host}:${buffer.readUInt16BE(end)}` });
           if (!allowedTarget(host, buffer.readUInt16BE(end))) { client.destroy(); return; }
           client.removeListener("data", receive);
           client.write(Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, 0, 0]));
@@ -143,7 +158,7 @@ export async function createRoutingNetwork() {
   });
   const proxyPort = await listen(proxy);
   return {
-    baseURL, proxyPort, hits,
+    baseURL, proxyPort, hits, proxyAttempts,
     async close() {
       for (const socket of sockets) socket.destroy();
       await Promise.all([origin, proxy].map((server) => new Promise((resolve) => server.close(resolve))));

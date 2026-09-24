@@ -22,4 +22,29 @@ describe("Chrome proxy authentication", () => {
     auth.listener(challenge({ requestId: "2" }), callback);
     expect(callback).toHaveBeenLastCalledWith({});
   });
+
+  it("primes Chromium's proxy auth cache once for each helper session", async () => {
+    const fetcher = vi.fn(async () => new Response(null, { status: 204 }));
+    const auth = new ChromeProxyAuth(fetcher as typeof fetch);
+
+    auth.prime();
+    expect(fetcher).not.toHaveBeenCalled();
+
+    auth.set({ port: 1055, username: "user", password: "secret" });
+    auth.prime();
+    auth.prime();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://100.100.100.100/.well-known/tailchrome-proxy-auth",
+      expect.objectContaining({
+        method: "HEAD",
+        mode: "no-cors",
+        redirect: "manual",
+      }),
+    );
+
+    auth.set({ port: 1056, username: "user", password: "new-secret" });
+    auth.prime();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
 });

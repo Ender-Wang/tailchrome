@@ -91,18 +91,23 @@ function isNavigationTimeout(err) {
   );
 }
 
-async function launchChrome(extensionDir, { chromeArgs = [] } = {}) {
+async function launchChrome(
+  extensionDir,
+  { chromeArgs = [], additionalExtensionDirs = [] } = {},
+) {
   await ensureChromeInstalled();
 
   const headless = process.env.HEADLESS !== "false";
   const userDataDir = mkdtempSync(resolve(tmpdir(), "tailchrome-chrome-profile-"));
+  const extensionDirs = [extensionDir, ...additionalExtensionDirs].join(",");
   const browser = await puppeteer.launch({
     headless,
+    acceptInsecureCerts: true,
     executablePath: await chromeExecutablePath(),
     userDataDir,
     args: [
-      `--disable-extensions-except=${extensionDir}`,
-      `--load-extension=${extensionDir}`,
+      `--disable-extensions-except=${extensionDirs}`,
+      `--load-extension=${extensionDirs}`,
       "--no-first-run",
       "--no-default-browser-check",
       ...chromeArgs,
@@ -129,12 +134,20 @@ async function launchChrome(extensionDir, { chromeArgs = [] } = {}) {
   };
 }
 
-async function launchFirefox(extensionDir, { firefoxPrefs = {} } = {}) {
+async function launchFirefox(
+  extensionDir,
+  {
+    firefoxPrefs = {},
+    additionalExtensionDirs = [],
+    additionalFirefoxExtensionUuids = {},
+  } = {},
+) {
   const executablePath = ensureFirefoxInstalled();
   const headless = process.env.HEADLESS !== "false";
   const userDataDir = mkdtempSync(resolve(tmpdir(), "tailchrome-firefox-profile-"));
   const browser = await puppeteer.launch({
     browser: "firefox",
+    acceptInsecureCerts: true,
     executablePath,
     headless,
     userDataDir,
@@ -146,11 +159,15 @@ async function launchFirefox(extensionDir, { firefoxPrefs = {} } = {}) {
       ...firefoxPrefs,
       "extensions.webextensions.uuids": JSON.stringify({
         [firefoxAddonId]: firefoxExtensionUuid,
+        ...additionalFirefoxExtensionUuids,
       }),
     },
   });
 
   await browser.installExtension(extensionDir);
+  for (const additionalExtensionDir of additionalExtensionDirs) {
+    await browser.installExtension(additionalExtensionDir);
+  }
 
   return {
     browser,

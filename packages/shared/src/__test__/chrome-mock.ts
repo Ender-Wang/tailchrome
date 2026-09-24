@@ -121,6 +121,12 @@ Object.defineProperty(globalThis, "chrome", {
   writable: true,
 });
 
+Object.defineProperty(globalThis, "fetch", {
+  value: vi.fn(async () => new Response(null, { status: 204 })),
+  writable: true,
+  configurable: true,
+});
+
 // Minimal document mock for popup module imports (top-level readyState check).
 // Only installed when document is not already defined (i.e. not in a real DOM env).
 if (typeof globalThis.document === "undefined") {
