@@ -32,6 +32,13 @@ func main() {
 		return
 	}
 	cleanupStaleBinary()
+	if cmd.Kind == commandDaemon {
+		hostinfo.SetApp("tailscale-browser-ext")
+		if err := runDaemon(); err != nil {
+			log.Fatalf("daemon failed: %v", err)
+		}
+		return
+	}
 
 	if cmd.Kind == commandInstall {
 		if cmd.Opts.ChromeFlatpak {
@@ -45,6 +52,9 @@ func main() {
 		printRegistrationResults(results)
 		if err != nil {
 			log.Fatalf("install failed: %v", err)
+		}
+		if err := installResidentService(cmd.Opts.BinaryPath); err != nil {
+			log.Fatalf("resident helper install failed: %v", err)
 		}
 		return
 	}
@@ -64,6 +74,9 @@ func main() {
 		if err := uninstallOwned(ownerKindDirect, binaryPath, false, cmd.Opts.UserDataDir); err != nil {
 			log.Fatalf("uninstall failed: %v", err)
 		}
+		if err := uninstallResidentService(); err != nil {
+			log.Fatalf("resident helper uninstall failed: %v", err)
+		}
 		fmt.Println("Native messaging host uninstalled successfully.")
 		return
 	}
@@ -78,6 +91,9 @@ func main() {
 		if err := installFirefox(firefoxExtensionID); err != nil {
 			log.Fatalf("Firefox install failed: %v", err)
 		}
+		if err := installResidentService(installedBinaryPath()); err != nil {
+			log.Fatalf("resident helper install failed: %v", err)
+		}
 		printBrowserInstallResult(width, BrowserInstallResult{Name: "Firefox", ParentExisted: true, ManifestPath: filepath.Join(firefoxManifestDir(), manifestNameFirefox+".json"), RegistryKeys: platformFirefoxRegistryKeys()})
 		fmt.Println("\nYou can use the Tailchrome extension in your browser.")
 		return
@@ -87,6 +103,9 @@ func main() {
 		if err := uninstall(); err != nil {
 			log.Fatalf("uninstall failed: %v", err)
 		}
+		if err := uninstallResidentService(); err != nil {
+			log.Fatalf("resident helper uninstall failed: %v", err)
+		}
 		fmt.Println("Native messaging host uninstalled successfully.")
 		return
 	}
@@ -94,6 +113,9 @@ func main() {
 	if cmd.Kind == commandLegacyInstall {
 		if err := install(cmd.Arg); err != nil {
 			log.Fatalf("install failed: %v", err)
+		}
+		if err := installResidentService(installedBinaryPath()); err != nil {
+			log.Fatalf("resident helper install failed: %v", err)
 		}
 		fmt.Println("Native messaging host installed successfully.")
 		return
@@ -114,15 +136,27 @@ func main() {
 		if err := installFirefox(firefoxExtensionID); err != nil {
 			log.Fatalf("Firefox install failed: %v", err)
 		}
+		if err := installResidentService(installedBinaryPath()); err != nil {
+			log.Fatalf("resident helper install failed: %v", err)
+		}
 		printBrowserInstallResult(width, BrowserInstallResult{Name: "Firefox", ParentExisted: true, ManifestPath: filepath.Join(firefoxManifestDir(), manifestNameFirefox+".json"), RegistryKeys: platformFirefoxRegistryKeys()})
 
 		fmt.Printf("\nYou can now close this terminal and use the Tailchrome extension.\n")
 		os.Exit(0)
 	}
 
-	// Default: run as native messaging host (launched by browser).
+	// Default: run as native messaging host (launched by browser). On macOS an
+	// installed resident daemon owns the node and proxy listeners; this process
+	// is only a native-messaging bridge. Fall back to the legacy in-process host
+	// when the daemon has not been installed yet.
 	sanitizeNativeHostEnvironment()
 	hostinfo.SetApp("tailscale-browser-ext")
+	if bridged, err := runNativeBridge(os.Stdin, os.Stdout); bridged {
+		if err != nil {
+			log.Printf("native bridge stopped: %v", err)
+		}
+		return
+	}
 
 	h := newHost(os.Stdin, os.Stdout)
 
@@ -170,6 +204,7 @@ func printUsage() {
 	fmt.Println("  tailchrome uninstall [--binary-path PATH] [--user-data-dir PATH]")
 	fmt.Println("  tailchrome uninstall --chrome-flatpak")
 	fmt.Println("  tailchrome version")
+	fmt.Println("  tailchrome daemon")
 	fmt.Println()
 	fmt.Println("Legacy: -install=C<extensionID>, -install-now, -uninstall, -version")
 }

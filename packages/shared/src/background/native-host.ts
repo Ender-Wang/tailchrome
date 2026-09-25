@@ -488,6 +488,23 @@ function isProcRunning(value: unknown): boolean {
     optionalField(value, "supportsPingPeer", isBoolean) &&
     optionalField(value, "supportsLogin", isBoolean) &&
     optionalField(value, "supportsCustomControlURL", isBoolean)
+    && optionalField(value, "supportsDaemonControl", isBoolean)
+    && optionalField(value, "supportsExternalProxy", isBoolean)
+  );
+}
+
+function isExternalProxy(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isBoolean(value["enabled"]) &&
+    isBoolean(value["running"]) &&
+    isString(value["host"]) &&
+    optionalField(value, "port", isFiniteNumber) &&
+    isStringArray(value["protocols"]) &&
+    isBoolean(value["authRequired"]) &&
+    optionalField(value, "username", isString) &&
+    optionalField(value, "password", isString) &&
+    optionalField(value, "error", isString)
   );
 }
 
@@ -560,6 +577,7 @@ export function isValidNativeReply(value: unknown): value is NativeReply {
     ["exitNodeSuggestion", isExitNodeSuggestion],
     ["fileSendProgress", isFileSendProgress],
     ["diagnostic", isDiagnostic],
+    ["externalProxy", isExternalProxy],
     ["error", isNativeError],
   ];
   let recognized = false;

@@ -293,6 +293,16 @@ func TestParseCommandSupportsHelpAndLegacyEqualsForms(t *testing.T) {
 	}
 }
 
+func TestParseCommandDaemon(t *testing.T) {
+	cmd, err := parseCommand([]string{"daemon"})
+	if err != nil || cmd.Kind != commandDaemon {
+		t.Fatalf("parseCommand(daemon) = %#v, %v; want commandDaemon", cmd, err)
+	}
+	if _, err := parseCommand([]string{"daemon", "extra"}); err == nil {
+		t.Fatal("daemon accepted an unexpected argument")
+	}
+}
+
 func TestValidateExtensionIDsAcceptsFirefoxAddonForms(t *testing.T) {
 	valid := []string{"addon@example.org", "{12345678-1234-1234-1234-1234567890ab}"}
 	for _, firefoxID := range valid {

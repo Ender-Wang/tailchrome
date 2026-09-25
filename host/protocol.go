@@ -30,6 +30,10 @@ type Request struct {
 
 	// For profile management
 	ProfileID string `json:"profileID,omitempty"`
+
+	// External proxy control. These commands are handled only by the resident
+	// daemon and never alter browser domain-split or bypass settings.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // Reply represents a message from the host to the browser extension.
@@ -43,6 +47,7 @@ type Reply struct {
 	ExitNodeSuggestion *ExitNodeSuggestion    `json:"exitNodeSuggestion,omitempty"`
 	FileSendProgress   *FileSendProgressReply `json:"fileSendProgress,omitempty"`
 	Diagnostic         *DiagnosticReply       `json:"diagnostic,omitempty"`
+	ExternalProxy      *ExternalProxyStatus   `json:"externalProxy,omitempty"`
 	Error              *ErrorReply            `json:"error,omitempty"`
 }
 
@@ -64,6 +69,8 @@ type ProcRunningReply struct {
 	SupportsPingPeer         bool       `json:"supportsPingPeer,omitempty"`
 	SupportsLogin            bool       `json:"supportsLogin,omitempty"`
 	SupportsCustomControlURL bool       `json:"supportsCustomControlURL,omitempty"`
+	SupportsDaemonControl    bool       `json:"supportsDaemonControl,omitempty"`
+	SupportsExternalProxy    bool       `json:"supportsExternalProxy,omitempty"`
 }
 
 // InitReply is the response to an "init" command.

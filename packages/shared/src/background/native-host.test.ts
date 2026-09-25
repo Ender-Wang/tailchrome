@@ -747,6 +747,17 @@ describe("isValidNativeReply", () => {
     );
     expect(isValidNativeReply({ init: {} })).toBe(true);
     expect(isValidNativeReply({ pong: {} })).toBe(true);
+    expect(isValidNativeReply({
+      externalProxy: {
+        enabled: true,
+        running: true,
+        host: "127.0.0.1",
+        port: 12345,
+        protocols: ["http", "socks5"],
+        authRequired: true,
+        username: "tailchrome",
+      },
+    })).toBe(true);
     // Unknown fields from newer helpers are tolerated, not rejected.
     expect(isValidNativeReply({ init: { arbitrary: "data" } })).toBe(true);
     expect(isValidNativeReply({ pong: { arbitrary: "data" } })).toBe(true);
@@ -837,6 +848,7 @@ describe("isValidNativeReply", () => {
       },
     },
     { procRunning: { port: "1055", pid: 1 } },
+    { externalProxy: { enabled: true, running: true, host: "127.0.0.1" } },
     { init: { error: 42 } },
     { pong: "bad" },
     { profiles: { current: null, profiles: [] } },

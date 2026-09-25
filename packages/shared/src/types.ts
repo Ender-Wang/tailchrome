@@ -36,7 +36,24 @@ export type NativeRequest =
   | { cmd: "suggest-exit-node" }
   | { cmd: "logout" }
   | { cmd: "ping-peer"; nodeID: string }
-  | { cmd: "netcheck" };
+  | { cmd: "netcheck" }
+  | { cmd: "get-external-proxy-status" }
+  | { cmd: "set-external-proxy"; enabled: boolean }
+  | { cmd: "reveal-external-proxy" }
+  | { cmd: "rotate-external-proxy-credentials" };
+
+export interface ExternalProxyStatus {
+  enabled: boolean;
+  running: boolean;
+  host: string;
+  port?: number;
+  protocols: string[];
+  authRequired: boolean;
+  username?: string;
+  /** Present only in a direct reveal/rotation reply; never retained in extension state. */
+  password?: string;
+  error?: string;
+}
 
 export interface NativeReply {
   procRunning?: {
@@ -52,6 +69,8 @@ export interface NativeReply {
     supportsLogin?: boolean;
     /** When true, the native host accepts a `controlURL` field in `set-prefs` (omitted on older helpers). */
     supportsCustomControlURL?: boolean;
+    supportsDaemonControl?: boolean;
+    supportsExternalProxy?: boolean;
     proxyAuth?: { version: 1; username: string; password: string };
   };
   init?: { error?: string };
@@ -61,6 +80,7 @@ export interface NativeReply {
   exitNodeSuggestion?: ExitNodeSuggestion;
   fileSendProgress?: FileSendProgress;
   diagnostic?: { title: string; body: string };
+  externalProxy?: ExternalProxyStatus;
   error?: { cmd: string; message: string };
 }
 
@@ -269,6 +289,9 @@ export interface TailscaleState {
   supportsLogin: boolean;
   /** True when the connected native helper advertises `supportsCustomControlURL` in procRunning. */
   supportsCustomControlURL: boolean;
+  supportsDaemonControl: boolean;
+  supportsExternalProxy: boolean;
+  externalProxy: ExternalProxyStatus | null;
   /** True when the native host disconnected and reconnection is being attempted. */
   reconnecting: boolean;
   /** Opt-in: send `up` automatically on extension startup when the node is Stopped/NoState. */
@@ -278,6 +301,7 @@ export interface TailscaleState {
 // Messages from background to popup
 export type PopupMessage =
   | { type: "state"; state: TailscaleState }
+  | { type: "external-proxy-details"; details: ExternalProxyStatus }
   | {
       type: "toast";
       message: string;
@@ -332,7 +356,10 @@ export type BackgroundMessage =
   | { type: "set-domain-split"; config: DomainSplitConfig }
   | { type: "open-admin" }
   | { type: "open-web-client" }
-  | { type: "set-auto-connect-on-start"; value: boolean };
+  | { type: "set-auto-connect-on-start"; value: boolean }
+  | { type: "set-external-proxy"; enabled: boolean }
+  | { type: "reveal-external-proxy" }
+  | { type: "rotate-external-proxy-credentials" };
 
 // === Proxy manager interface ===
 

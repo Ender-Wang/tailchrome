@@ -346,6 +346,56 @@ describe("initBackground", () => {
       );
     });
 
+    it("routes revealed external proxy credentials only to the requesting popup", async () => {
+      await setupBackground();
+      const firstPopup = createPopupPort();
+      const secondPopup = createPopupPort();
+      connectListeners[0]!(firstPopup);
+      connectListeners[0]!(secondPopup);
+      firstPopup.postMessage.mockClear();
+      secondPopup.postMessage.mockClear();
+
+      sendNativeMessage({
+        procRunning: {
+          proxyAuth: { version: 1, username: "tailchrome", password: "a".repeat(52) },
+          port: 1055,
+          pid: 1234,
+          supportsDaemonControl: true,
+          supportsExternalProxy: true,
+        },
+      });
+      expect(nativePort.postMessage).toHaveBeenCalledWith({ cmd: "get-external-proxy-status" });
+
+      firstPopup.postMessage.mockClear();
+      secondPopup.postMessage.mockClear();
+      firstPopup.onMessage._listeners[0]!({ type: "reveal-external-proxy" });
+      expect(nativePort.postMessage).toHaveBeenCalledWith({ cmd: "reveal-external-proxy" });
+      sendNativeMessage({
+        externalProxy: {
+          enabled: true,
+          running: true,
+          host: "127.0.0.1",
+          port: 23123,
+          protocols: ["http", "socks5"],
+          authRequired: true,
+          username: "tailchrome",
+          password: "private-password",
+        },
+      });
+
+      expect(firstPopup.postMessage).toHaveBeenCalledWith({
+        type: "external-proxy-details",
+        details: expect.objectContaining({ password: "private-password" }),
+      });
+      expect(secondPopup.postMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "external-proxy-details" }),
+      );
+      const stateMessages = [...firstPopup.postMessage.mock.calls, ...secondPopup.postMessage.mock.calls]
+        .map((call) => call[0])
+        .filter((message) => message?.type === "state");
+      expect(JSON.stringify(stateMessages)).not.toContain("private-password");
+    });
+
     it("keeps a differing helper version connected with a non-blocking notice", async () => {
       await setupBackground();
       sendNativeMessage({

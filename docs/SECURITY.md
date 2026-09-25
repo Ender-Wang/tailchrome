@@ -57,10 +57,25 @@ Helper diagnostic reports are generated only when the user clicks the copy or ex
 
 ## Local Proxy Trust Boundary
 
-The helper exposes its SOCKS5/HTTP proxy on a randomly assigned `127.0.0.1` port and requires a fresh random credential on every helper launch. Credentials are sent over native messaging and held only by the background proxy manager, outside popup state, storage, and diagnostics. Chromium uses authenticated HTTP proxying; Firefox uses authenticated SOCKS5.
+The browser proxy listens on a randomly assigned `127.0.0.1` port and requires a fresh random credential on every helper launch. Credentials are sent over native messaging and held only by the background proxy manager, outside popup state, storage, and diagnostics. Chromium uses authenticated HTTP proxying; Firefox uses authenticated SOCKS5.
+
+On macOS, users may opt in to a separate mixed HTTP/SOCKS5 listener for local apps. It has an independent stable port and a per-install random password stored in a mode-`0600` file inside a mode-`0700` directory. Authentication is mandatory. The extension keeps non-secret status only; it requests the password on demand and returns it solely to the popup that requested reveal or rotation. Disabling the listener or rotating its password closes established sessions. The listener binds only to `127.0.0.1` and does not expose the helper's local web client.
+
+The macOS LaunchAgent accepts browser bridges on a mode-`0600` Unix socket and
+requires a random mode-`0600` bridge token before native-message framing begins.
+The bridge must then identify its browser profile in the first `init` message;
+that connection cannot change profiles later. Each profile retains a separate
+`tsnet` server, state directory, browser listener, and ephemeral browser proxy
+credential. The local-app listener is attached to the profile that enabled it,
+and changing that owner requires disable then enable rather than merging
+profile identities.
+
+Logging out or creating, switching, or deleting a Tailscale account profile
+disables the local-app listener and closes its sessions before the identity
+transition. Re-enablement is explicit.
 
 Update the extension and helper together. The extension blocks proxy use when a helper does not provide the authenticated proxy capability; current helpers do not expose an unauthenticated compatibility listener.
 
-The helper checks destinations against its authoritative network map and current preferences. It permits Tailscale addresses, approved subnet routes, public destinations through a selected exit node, and attached private LAN destinations when LAN access is explicitly enabled. Loopback, link-local, and multicast destinations are blocked. The local Tailscale web client is authenticated separately before dispatch. DNS answers are checked before literal addresses are dialed; protected connections cannot fall back to the system network after route removal.
+The helper checks destinations against its authoritative network map and current preferences. It permits Tailscale addresses, approved subnet routes, public destinations through a selected exit node, and attached private LAN destinations when LAN access is explicitly enabled. Loopback, link-local, and multicast destinations are blocked. The local Tailscale web client is authenticated separately before dispatch. DNS answers are checked before literal addresses are dialed; protected connections cannot fall back to the system network after route removal. Browser domain split and bypass settings remain a browser-only decision; they neither filter nor directly route requests accepted by the local-app listener.
 
 This limits access by other local users and processes that can discover the port. It does not protect against processes that can read the browser or helper memory or control the same operating-system account.

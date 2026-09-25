@@ -10,6 +10,15 @@ Access your Tailscale network from the browser. You do not need the system VPN.
 
 Tailchrome runs a full Tailscale node in each browser profile. It does not change system networking. Chrome, Firefox, and other Chromium browsers (Brave, Edge, Vivaldi, Opera, and Arc on macOS) share the same feature set. Tailnet traffic goes through a local SOCKS5/HTTP proxy, so the extension works with or without the Tailscale system app.
 
+On macOS, the helper can also expose an opt-in authenticated proxy for local
+apps such as Nextcloud. Enable **Advanced → Local app proxy** in the extension,
+then reveal and copy either the HTTP(S) or SOCKS5 connection details. The
+LaunchAgent-hosted helper remains available when the browser is closed. This
+listener is independent of browser split-tunneling and bypass rules: traffic
+an app sends to it is routed through the enabling browser profile's Tailchrome
+node or rejected, never silently sent directly. Other browser profiles keep
+their own independent nodes and browser proxy settings.
+
 <p align="center">
   <img align="top" width="45%" alt="Tailchrome dashboard showing connection status and devices" src="store-assets/artwork/ui/dashboard.png" />
   <img align="top" width="45%" alt="Tailchrome exit-node picker showing devices and Mullvad VPN locations" src="store-assets/artwork/ui/exit-nodes-readme.png" />
@@ -30,6 +39,7 @@ Tailchrome runs a full Tailscale node in each browser profile. It does not chang
 - Keep the UI docked while you browse with the side panel (Chrome side panel, Firefox sidebar).
 - Optional auto-connect brings the tailnet up when the browser starts.
 - Shields Up blocks incoming connections.
+- Optional authenticated HTTP(S)/SOCKS5 access for local apps on macOS.
 
 ## How it works
 
