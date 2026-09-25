@@ -25,7 +25,7 @@ Copy the **Firefox AMO** Summary, Description, and Categories from [STORE_LISTIN
 
 - Required categories: `browsingActivity`, `websiteContent`
 - No analytics or advertising trackers
-- Data is transmitted only as needed to log in to Tailscale, proxy traffic onto the user's tailnet, apply exit-node/split-tunneling choices, and complete user-initiated actions such as Taildrop
+- Data is transmitted only as needed to log in to Tailscale, proxy browser traffic onto the user's tailnet, carry traffic from apps the user explicitly configures for the optional macOS loopback proxy, apply exit-node/split-tunneling choices, and complete user-initiated actions such as Taildrop
 
 ## Media Assets
 

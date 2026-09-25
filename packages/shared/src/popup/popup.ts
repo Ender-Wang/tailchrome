@@ -1,5 +1,5 @@
 import type { TailscaleState, PopupMessage, BackgroundMessage } from "../types";
-import { renderConnected, updateConnected } from "./views/connected";
+import { renderConnected, setExternalProxyDetails, updateConnected } from "./views/connected";
 import { renderDisconnected, updateDisconnected } from "./views/disconnected";
 import { renderNeedsLogin, updateNeedsLogin } from "./views/needs-login";
 import { renderNeedsInstall } from "./views/needs-install";
@@ -265,6 +265,9 @@ async function init(): Promise<void> {
           dismissMs: msg.dismissMs,
           multiline: msg.multiline,
         });
+        break;
+      case "external-proxy-details":
+        setExternalProxyDetails(msg.details);
         break;
     }
   });

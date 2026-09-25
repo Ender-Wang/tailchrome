@@ -1,4 +1,4 @@
-import type { DomainSplitConfig, DomainSplitMode, TailscaleState } from "../../types";
+import type { DomainSplitConfig, DomainSplitMode, ExternalProxyStatus, TailscaleState } from "../../types";
 import { ADMIN_URL, TAILCHROME_PROJECT_URL, isCustomControlURL } from "../../constants";
 import {
   createCoordinationServerRow,
@@ -36,6 +36,14 @@ let coordinationServerEditorOpen = false;
 
 /** UI-only: Advanced section (Run as Exit Node, local node page; peer SSH when expanded). */
 let advancedSectionOpen = false;
+
+let revealedExternalProxy: ExternalProxyStatus | null = null;
+
+export function setExternalProxyDetails(details: ExternalProxyStatus): void {
+  revealedExternalProxy = details;
+  const container = document.querySelector<HTMLElement>("[data-external-proxy-details]");
+  if (container) renderExternalProxyDetails(container, details);
+}
 
 const PEER_SEARCH_THRESHOLD = 6;
 
@@ -277,6 +285,54 @@ export function renderConnected(root: HTMLElement, state: TailscaleState): void 
   });
   advancedPanel.appendChild(localNodeRow);
 
+  const externalProxyRow = document.createElement("div");
+  externalProxyRow.className = "setting-row";
+  externalProxyRow.dataset.externalProxyRow = "true";
+  externalProxyRow.dataset.supported = String(state.supportsExternalProxy);
+  externalProxyRow.dataset.enabled = String(state.externalProxy?.enabled ?? false);
+  const externalProxyLabel = document.createElement("span");
+  externalProxyLabel.className = "setting-label";
+  externalProxyLabel.textContent = "Local app proxy";
+  externalProxyRow.appendChild(externalProxyLabel);
+  if (state.supportsExternalProxy) {
+    const enabled = state.externalProxy?.enabled ?? false;
+    const externalProxyToggle = createToggle(enabled, (checked) => {
+      revealedExternalProxy = null;
+      sendMessage({ type: "set-external-proxy", enabled: checked });
+    }, "Allow local apps to use Tailchrome");
+    externalProxyRow.appendChild(externalProxyToggle);
+  } else {
+    const unavailable = document.createElement("span");
+    unavailable.className = "setting-value";
+    unavailable.textContent = "Helper update required";
+    externalProxyRow.appendChild(unavailable);
+  }
+  advancedPanel.appendChild(externalProxyRow);
+
+  if (state.supportsExternalProxy && state.externalProxy?.enabled) {
+    const externalActions = document.createElement("div");
+    externalActions.className = "setting-row";
+    const reveal = document.createElement("button");
+    reveal.type = "button";
+    reveal.className = "btn btn-secondary";
+    reveal.textContent = "Reveal connection details";
+    reveal.addEventListener("click", () => sendMessage({ type: "reveal-external-proxy" }));
+    externalActions.appendChild(reveal);
+    const rotate = document.createElement("button");
+    rotate.type = "button";
+    rotate.className = "btn btn-secondary";
+    rotate.textContent = "Rotate password";
+    rotate.addEventListener("click", () => sendMessage({ type: "rotate-external-proxy-credentials" }));
+    externalActions.appendChild(rotate);
+    advancedPanel.appendChild(externalActions);
+
+    const details = document.createElement("div");
+    details.dataset.externalProxyDetails = "true";
+    details.className = "external-proxy-details";
+    if (revealedExternalProxy) renderExternalProxyDetails(details, revealedExternalProxy);
+    advancedPanel.appendChild(details);
+  }
+
   // Coordination server (control plane) editor — collapsible inside Advanced.
   // Changing this triggers a logout + re-auth against the new server. The same
   // editor also appears in the needs-login and disconnected views so users can
@@ -487,6 +543,35 @@ export function renderConnected(root: HTMLElement, state: TailscaleState): void 
   shell.appendChild(detail);
 
   root.appendChild(shell);
+}
+
+function renderExternalProxyDetails(container: HTMLElement, details: ExternalProxyStatus): void {
+  container.textContent = "";
+  if (!details.running || !details.port || !details.username || !details.password) {
+    const message = document.createElement("div");
+    message.className = "setting-help";
+    message.textContent = details.error || "The local app proxy is not running.";
+    container.appendChild(message);
+    return;
+  }
+  const credentials = `${encodeURIComponent(details.username)}:${encodeURIComponent(details.password)}`;
+  const values = [
+    ["Host", details.host],
+    ["Port", String(details.port)],
+    ["Username", details.username],
+    ["Password", details.password],
+    ["HTTP(S)", `http://${credentials}@${details.host}:${details.port}`],
+    ["SOCKS5", `socks5://${credentials}@${details.host}:${details.port}`],
+  ] as const;
+  for (const [label, value] of values) {
+    const row = document.createElement("div");
+    row.className = "status-bar-row";
+    const text = document.createElement("span");
+    text.className = "status-bar-ip";
+    text.textContent = `${label}: ${value}`;
+    row.append(text, createCopyButton(value));
+    container.appendChild(row);
+  }
 }
 
 // Track health key to detect changes during in-place updates
@@ -734,6 +819,16 @@ export function updateConnected(root: HTMLElement, state: TailscaleState): void 
   const hasProfileRow = view.querySelector(".setting-row-profile") !== null;
   const shouldHaveProfileRow = state.profiles.length > 0;
   if (hasProfileRow !== shouldHaveProfileRow) {
+    renderConnected(root, state);
+    return;
+  }
+
+  const externalProxyRow = view.querySelector<HTMLElement>("[data-external-proxy-row]");
+  const externalProxyChanged =
+    !externalProxyRow ||
+    externalProxyRow.dataset.supported !== String(state.supportsExternalProxy) ||
+    externalProxyRow.dataset.enabled !== String(state.externalProxy?.enabled ?? false);
+  if (externalProxyChanged) {
     renderConnected(root, state);
     return;
   }

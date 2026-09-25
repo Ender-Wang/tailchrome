@@ -108,46 +108,55 @@ func newHost(r io.Reader, w io.Writer) *Host {
 // readMessages reads native messaging protocol messages from stdin in a loop.
 // Each message is a 4-byte little-endian length prefix followed by a JSON payload.
 func (h *Host) readMessages() {
+	h.readMessagesFrom(h.stdin, h.handleRequest)
+}
+
+func (h *Host) hasSession(initID string) bool {
+	h.sessionMu.RLock()
+	defer h.sessionMu.RUnlock()
+	return h.ts != nil && h.lc != nil && h.initID == initID
+}
+
+func (h *Host) readMessagesFrom(reader io.Reader, handle func(Request)) {
 	for {
-		// Read the 4-byte length prefix.
-		var length uint32
-		if err := binary.Read(h.stdin, binary.LittleEndian, &length); err != nil {
+		req, err := readNativeRequest(reader)
+		if err != nil {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				log.Println("stdin closed, exiting")
 				return
 			}
-			log.Printf("failed to read message length: %v", err)
-			return
+			log.Printf("failed to read native message: %v", err)
+			h.sendError("", err.Error())
+			continue
 		}
+		handle(req)
+	}
+}
 
+func readNativeRequest(reader io.Reader) (Request, error) {
+	for {
+		var length uint32
+		if err := binary.Read(reader, binary.LittleEndian, &length); err != nil {
+			return Request{}, err
+		}
 		if length == 0 {
 			continue
 		}
 		if length > maxMessageSize {
-			log.Printf("message too large: %d bytes", length)
-			if _, err := io.CopyN(io.Discard, h.stdin, int64(length)); err != nil {
-				log.Printf("failed to drain oversized message: %v", err)
-				return
+			if _, err := io.CopyN(io.Discard, reader, int64(length)); err != nil {
+				return Request{}, err
 			}
-			h.sendError("", fmt.Sprintf("message too large: %d bytes", length))
-			continue
+			return Request{}, fmt.Errorf("message too large: %d bytes", length)
 		}
-
-		// Read the JSON payload.
 		buf := make([]byte, length)
-		if _, err := io.ReadFull(h.stdin, buf); err != nil {
-			log.Printf("failed to read message body: %v", err)
-			return
+		if _, err := io.ReadFull(reader, buf); err != nil {
+			return Request{}, err
 		}
-
 		var req Request
 		if err := json.Unmarshal(buf, &req); err != nil {
-			log.Printf("failed to unmarshal request: %v", err)
-			h.sendError("", fmt.Sprintf("invalid JSON: %v", err))
-			continue
+			return Request{}, fmt.Errorf("invalid JSON: %w", err)
 		}
-
-		h.handleRequest(req)
+		return req, nil
 	}
 }
 
@@ -173,17 +182,30 @@ func (h *Host) send(reply Reply) {
 		return
 	}
 
+	frame := make([]byte, 4+len(data))
+	binary.LittleEndian.PutUint32(frame, uint32(len(data)))
+	copy(frame[4:], data)
 	h.mu.Lock()
 	defer h.mu.Unlock()
-
-	if err := binary.Write(h.stdout, binary.LittleEndian, uint32(len(data))); err != nil {
-		log.Printf("failed to write reply length: %v", err)
-		return
-	}
-	if _, err := h.stdout.Write(data); err != nil {
+	if _, err := h.stdout.Write(frame); err != nil {
 		log.Printf("failed to write reply body: %v", err)
 		return
 	}
+}
+
+func writeReply(w io.Writer, reply Reply) error {
+	data, err := json.Marshal(reply)
+	if err != nil {
+		return err
+	}
+	if len(data) > maxMessageSize {
+		return fmt.Errorf("reply too large: %d bytes", len(data))
+	}
+	frame := make([]byte, 4+len(data))
+	binary.LittleEndian.PutUint32(frame, uint32(len(data)))
+	copy(frame[4:], data)
+	_, err = w.Write(frame)
+	return err
 }
 
 // truncateStatusReply removes peers from the end until a status reply fits the

@@ -156,10 +156,55 @@ Legacy `-install-now`, `--install C<id>`, `--install F<id>`, `-uninstall`, and
 its historical runtime-copy behavior; new installers use the direct commands.
 The native-host names and released extension IDs are unchanged.
 
+## Resident helper on macOS
+
+Every macOS registration method also installs a per-user LaunchAgent at:
+
+```text
+~/Library/LaunchAgents/org.tesseras.tailchrome.helper.plist
+```
+
+The LaunchAgent runs the same registered helper binary with the `daemon`
+subcommand. It owns one independent `tsnet` node and browser proxy per known
+browser profile even when every browser is closed. Browser-launched native-host
+processes are small stdio bridges to its mode-`0600` Unix socket; the first
+message must be that browser profile's `init`, and subsequent commands stay
+bound to that profile. Runtime and control files live under:
+
+```text
+~/Library/Application Support/Tailchrome/
+```
+
+The extension's **Advanced → Local app proxy** switch controls a separate
+loopback listener for applications such as Nextcloud. It supports HTTP proxying
+(including HTTPS via CONNECT) and SOCKS5 on the same stable port. Authentication
+is always required: the username is `tailchrome`, while a random password is
+generated for this installation and stored only in the protected helper
+configuration. Use **Reveal connection details** to copy the individual fields
+or proxy URLs; use **Rotate password** to revoke existing sessions and generate
+a replacement.
+
+The listener uses the independent Tailchrome node belonging to the browser
+profile that enables it. It keeps that ownership across helper restarts. To use
+a different browser profile, disable the listener from any Tailchrome popup,
+then enable it from the desired profile. Enabling the listener does not merge
+or replace any browser profile identity.
+
+Logging out or creating, switching, or deleting a Tailscale account profile
+disables the local-app listener before the identity changes. Re-enable it after
+the transition if the application should use the new identity.
+
+This listener does not consume the extension's domain split or bypass list.
+Every destination submitted by the application is checked against the helper's
+current Tailscale routes and preferences, then routed through `tsnet` or
+rejected. There is no direct-network fallback.
+
 ## Removal
 
 `tailchrome uninstall` removes registrations owned by that executable and keeps
-the executable and node state. Supply the same stable `--binary-path` used for
+the executable and node state. On macOS it also unloads and removes that
+account's Tailchrome LaunchAgent, bridge token, and local-app proxy credential;
+local Tailscale identity directories remain in place. Supply the same stable `--binary-path` used for
 registration when invoking a package executable through a different path.
 
 To remove a script-managed helper as well, copy the removal command printed

@@ -244,6 +244,10 @@ function nativeCommandErrorCopy(command: string): string {
     case "ping-peer":
     case "netcheck":
       return "The helper could not run that diagnostic.";
+    case "set-external-proxy":
+    case "reveal-external-proxy":
+    case "rotate-external-proxy-credentials":
+      return "The helper could not update the local app proxy.";
     default:
       return "The helper could not complete that request.";
   }
@@ -741,6 +745,9 @@ export function initBackground(
           supportsPingPeer: false,
           supportsLogin: false,
           supportsCustomControlURL: false,
+          supportsDaemonControl: false,
+          supportsExternalProxy: false,
+          externalProxy: null,
         });
       } else {
         sawHealthyProcRunning = true;
@@ -753,7 +760,12 @@ export function initBackground(
           supportsPingPeer: msg.procRunning.supportsPingPeer === true,
           supportsLogin: msg.procRunning.supportsLogin === true,
           supportsCustomControlURL: msg.procRunning.supportsCustomControlURL === true,
+          supportsDaemonControl: msg.procRunning.supportsDaemonControl === true,
+          supportsExternalProxy: msg.procRunning.supportsExternalProxy === true,
         });
+        if (msg.procRunning.supportsExternalProxy === true) {
+          nativeHost.send({ cmd: "get-external-proxy-status" });
+        }
         maybeCompleteHelperRecovery();
       }
     }
@@ -777,6 +789,23 @@ export function initBackground(
     // Pong: no-op, just keeps service worker alive
     if (msg.pong) {
       // Keepalive acknowledged
+    }
+
+    if (msg.externalProxy) {
+      const { password: _password, ...safeStatus } = msg.externalProxy;
+      store.update({ externalProxy: safeStatus });
+      if (pendingExternalProxyPort) {
+        try {
+          const popupMsg: PopupMessage = {
+            type: "external-proxy-details",
+            details: msg.externalProxy,
+          };
+          pendingExternalProxyPort.postMessage(popupMsg);
+        } catch {
+          // The requesting popup may have closed before the helper replied.
+        }
+        pendingExternalProxyPort = null;
+      }
     }
 
     // Status update
@@ -917,6 +946,12 @@ export function initBackground(
 
     // Error from native host
     if (msg.error) {
+      if (
+        msg.error.cmd === "reveal-external-proxy" ||
+        msg.error.cmd === "rotate-external-proxy-credentials"
+      ) {
+        pendingExternalProxyPort = null;
+      }
       if (msg.error.cmd === "list-profiles") {
         profileRefreshNeeded = true;
         profileRefreshInFlight = false;
@@ -1033,6 +1068,9 @@ export function initBackground(
       supportsPingPeer: false,
       supportsLogin: false,
       supportsCustomControlURL: false,
+      supportsDaemonControl: false,
+      supportsExternalProxy: false,
+      externalProxy: null,
     });
   }
 
@@ -1378,6 +1416,8 @@ export function initBackground(
     armHelperRetry(record);
   }
 
+  let pendingExternalProxyPort: chrome.runtime.Port | null = null;
+
   chrome.runtime.onConnect.addListener((port: chrome.runtime.Port) => {
     if (port.name !== "popup") return;
 
@@ -1396,11 +1436,12 @@ export function initBackground(
     }
 
     port.onMessage.addListener((msg: BackgroundMessage) => {
-      handlePopupMessage(msg);
+      handlePopupMessage(msg, port);
     });
 
     port.onDisconnect.addListener(() => {
       popupPorts.delete(port);
+      if (pendingExternalProxyPort === port) pendingExternalProxyPort = null;
     });
   });
 
@@ -1433,7 +1474,7 @@ export function initBackground(
     }
   }
 
-  function handlePopupMessage(msg: BackgroundMessage): void {
+  function handlePopupMessage(msg: BackgroundMessage, sourcePort?: chrome.runtime.Port): void {
     const state = store.getState();
 
     switch (msg.type) {
@@ -1660,6 +1701,27 @@ export function initBackground(
         void writeAutoConnectPref(msg.value).catch((err) => {
           console.warn("[Background] writeAutoConnectPref failed:", err);
         });
+        break;
+      }
+
+      case "set-external-proxy": {
+        if (!state.supportsExternalProxy) {
+          sendToastToPopup("Please update the macOS helper to use the local app proxy.", "error");
+          break;
+        }
+        nativeHost.send({ cmd: "set-external-proxy", enabled: msg.enabled });
+        break;
+      }
+
+      case "reveal-external-proxy": {
+        pendingExternalProxyPort = sourcePort ?? null;
+        nativeHost.send({ cmd: "reveal-external-proxy" });
+        break;
+      }
+
+      case "rotate-external-proxy-credentials": {
+        pendingExternalProxyPort = sourcePort ?? null;
+        nativeHost.send({ cmd: "rotate-external-proxy-credentials" });
         break;
       }
 

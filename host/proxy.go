@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -46,30 +47,38 @@ func (h *Host) startProxy() (int, error) {
 	h.proxyListener = ln
 	port := ln.Addr().(*net.TCPAddr).Port
 
-	// Split the listener into SOCKS5 and HTTP listeners.
-	socksLn, httpLn := proxymux.SplitSOCKSAndHTTP(ln)
+	h.serveAuthenticatedProxy(ln, h.proxyAuth, true)
 
-	// Start the SOCKS5 proxy.
+	return port, nil
+}
+
+// serveAuthenticatedProxy serves SOCKS5 and HTTP proxy protocols on one
+// listener. Browser and external-app listeners deliberately call this with
+// separate credentials and lifecycles; only the browser listener exposes the
+// helper's local web client.
+func (h *Host) serveAuthenticatedProxy(ln net.Listener, auth *ProxyAuth, allowLocalWebClient bool) {
+	socksLn, httpLn := proxymux.SplitSOCKSAndHTTP(ln)
 	socksServer := &socks5.Server{
 		Logf:     func(string, ...any) {},
-		Username: h.proxyAuth.Username,
-		Password: h.proxyAuth.Password,
-		Dialer:   h.socksDialer,
+		Username: auth.Username,
+		Password: auth.Password,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if allowLocalWebClient {
+				return h.socksDialer(ctx, network, addr)
+			}
+			return h.tsnetDialer(ctx, network, addr)
+		},
 	}
 	go func() {
-		if err := socksServer.Serve(socksLn); err != nil {
+		if err := socksServer.Serve(socksLn); err != nil && !errors.Is(err, net.ErrClosed) {
 			log.Printf("SOCKS5 server error: %v", err)
 		}
 	}()
-
-	// Start the HTTP proxy.
 	go func() {
-		if err := h.serveHTTPProxy(httpLn); err != nil {
+		if err := h.serveHTTPProxyWithAuth(httpLn, auth, allowLocalWebClient); err != nil && !errors.Is(err, net.ErrClosed) && err != http.ErrServerClosed {
 			log.Printf("HTTP proxy server error: %v", err)
 		}
 	}()
-
-	return port, nil
 }
 
 // socksDialer runs only after the SOCKS server has authenticated the process
@@ -135,11 +144,19 @@ func (h *Host) tsnetDialer(ctx context.Context, network, addr string) (net.Conn,
 // serveHTTPProxy serves HTTP proxy requests, routing 100.100.100.100 to the
 // Tailscale web client and everything else through the tailnet.
 func (h *Host) serveHTTPProxy(ln net.Listener) error {
-	server := &http.Server{Handler: h.httpProxyHandler(), ReadHeaderTimeout: 10 * time.Second}
+	return h.serveHTTPProxyWithAuth(ln, h.proxyAuth, true)
+}
+
+func (h *Host) serveHTTPProxyWithAuth(ln net.Listener, auth *ProxyAuth, allowLocalWebClient bool) error {
+	server := &http.Server{Handler: h.httpProxyHandlerWithAuth(auth, allowLocalWebClient), ReadHeaderTimeout: 10 * time.Second}
 	return server.Serve(ln)
 }
 
 func (h *Host) httpProxyHandler() http.Handler {
+	return h.httpProxyHandlerWithAuth(h.proxyAuth, true)
+}
+
+func (h *Host) httpProxyHandlerWithAuth(auth *ProxyAuth, allowLocalWebClient bool) http.Handler {
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			// No-op: we handle the request ourselves.
@@ -151,7 +168,7 @@ func (h *Host) httpProxyHandler() http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !h.authenticateProxyRequest(r) {
+		if !authenticateProxyRequest(r, auth) {
 			w.Header().Set("Proxy-Authenticate", `Basic realm="Tailchrome"`)
 			http.Error(w, "Proxy authentication required", http.StatusProxyAuthRequired)
 			return
@@ -160,7 +177,7 @@ func (h *Host) httpProxyHandler() http.Handler {
 		// Chrome primes its proxy credential cache before routing requests from
 		// other extensions (whose auth challenges it cannot observe). Keep the
 		// probe local and independent of tsnet, exit nodes and RunWebClient.
-		if r.Method == http.MethodHead && r.URL.Scheme == "http" &&
+		if allowLocalWebClient && r.Method == http.MethodHead && r.URL.Scheme == "http" &&
 			r.Host == "tailchrome-proxy-auth.invalid" && r.URL.Path == "/" {
 			w.Header().Set("Cache-Control", "no-store")
 			w.WriteHeader(http.StatusNoContent)
@@ -173,7 +190,7 @@ func (h *Host) httpProxyHandler() http.Handler {
 
 		// The proxy credential has been checked before entering the local
 		// web client's separate control-plane authorization flow.
-		if host == "100.100.100.100" {
+		if allowLocalWebClient && host == "100.100.100.100" {
 			h.serveLocalWebClient(w, r)
 			return
 		}
@@ -587,7 +604,11 @@ func (h *Host) handleConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Host) authenticateProxyRequest(r *http.Request) bool {
-	if h.proxyAuth == nil {
+	return authenticateProxyRequest(r, h.proxyAuth)
+}
+
+func authenticateProxyRequest(r *http.Request, auth *ProxyAuth) bool {
+	if auth == nil {
 		return false
 	}
 	const prefix = "Basic "
@@ -599,6 +620,6 @@ func (h *Host) authenticateProxyRequest(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	expected := h.proxyAuth.Username + ":" + h.proxyAuth.Password
+	expected := auth.Username + ":" + auth.Password
 	return subtle.ConstantTimeCompare(decoded, []byte(expected)) == 1
 }

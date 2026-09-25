@@ -1,6 +1,6 @@
 # Tailchrome Privacy Policy
 
-Last updated: 2026-09-21
+Last updated: 2026-09-25
 
 ## Summary
 
@@ -24,6 +24,14 @@ Tailchrome stores the following data locally in browser storage:
 
 This data stays on the local device unless the user exports or syncs their browser profile separately.
 
+On macOS, the resident helper stores its per-profile run-state map, a random
+bridge token, and the optional local-app proxy configuration under
+`~/Library/Application Support/Tailchrome/`. The directory is accessible only
+to the current operating-system account; secret files use mode `0600`. The
+local-app configuration contains its stable loopback port, fixed username,
+random per-install password, enabled state, and owning browser-profile
+identifier. The password is not written to browser storage or diagnostics.
+
 ## Data Transmitted By Tailchrome
 
 When the extension is enabled, Tailchrome communicates with a local native helper over the browser's native messaging channel. That helper runs the Tailscale client logic for the current browser profile.
@@ -31,6 +39,7 @@ When the extension is enabled, Tailchrome communicates with a local native helpe
 Depending on the features the user enables, Tailchrome may transmit:
 
 - Browsing activity and website content needed to proxy tailnet-bound traffic, exit-node traffic, and Taildrop transfers.
+- Traffic from local applications that the user explicitly configures to use the optional macOS HTTP(S)/SOCKS5 proxy.
 - Authentication and session data needed to sign in to Tailscale or a custom coordination server the user configures.
 - Device and network metadata required to discover peers, MagicDNS names, subnet routes, and exit nodes.
 - User-initiated file contents when the user sends a file with Taildrop.
@@ -77,6 +86,11 @@ MagicDNS suffixes, Tailscale IP addresses, peers, profiles, user or node
 identifiers, Taildrop details, traffic counters, payloads, credentials,
 filesystem user names, and registry values containing user data.
 
+Local-app proxy credentials and the resident helper's bridge token are also
+excluded. Revealed proxy credentials are sent only over the local native
+connection to the popup that requested them and are not merged into persistent
+extension state.
+
 The report remains on the local device until the user copies, saves, or
 chooses to share it.
 
@@ -89,6 +103,7 @@ Users can:
 - clear split-tunneling domains,
 - clear custom peer URLs from the popup,
 - remove exit-node selection,
+- disable the macOS local-app proxy or rotate its password, which closes existing proxy sessions,
 - copy or export a local helper diagnostic report,
 - log out of Tailscale, and
 - uninstall the extension and native helper.

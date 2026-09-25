@@ -81,13 +81,12 @@ Each browser profile gets its own isolated Tailscale identity, meaning you can b
                     | NativeRequest / NativeReply
                     v
 +---------------------------------------------+
-|  NATIVE HOST (Go)                            |
-|  - tsnet.Server per browser profile          |
-|  - IPN bus watcher (real-time state)         |
-|  - SOCKS5 + HTTP proxy on 127.0.0.1:0       |
-|  - Tailscale web client at 100.100.100.100   |
-|  - Profile management (create/switch/delete) |
-|  - Taildrop file sender                      |
+|  NATIVE HOST / macOS RESIDENT DAEMON (Go)   |
+|  - independent tsnet.Server per profile      |
+|  - per-profile browser proxy + IPN watcher   |
+|  - macOS authenticated bridge socket         |
+|  - optional app HTTP/SOCKS5 proxy (macOS)    |
+|  - web client, profiles, and Taildrop        |
 +---------------------------------------------+
                     |
                     | WireGuard / DERP / Control
@@ -97,11 +96,12 @@ Each browser profile gets its own isolated Tailscale identity, meaning you can b
 
 ### Data Flow
 
-1. **Startup:** Extension opens native messaging connection. Host starts, binds a SOCKS5/HTTP proxy on a random local port, and sends `procRunning` with the port number and version.
-2. **Init:** Extension sends `init` with a browser-profile UUID (`initID`) and an optional `wantRunning` hint. Host creates (or reuses) a `tsnet.Server` with state stored at `~/.config/tailscale-browser-ext/<initID>/`. Because `tsnet.Start` forces `WantRunning=true`, the host applies `WantRunning=false` right after starting a fresh server when the hint is `false` — this is what keeps the node down at browser launch when auto-connect is off.
+1. **Startup:** The extension opens a native messaging connection and sends `init` first. On macOS, the browser-launched process authenticates to the per-user LaunchAgent and bridges native frames; on other platforms the process hosts the session itself. The selected per-profile host binds an authenticated SOCKS5/HTTP browser proxy and sends `procRunning` with its port, credential, version, and capability flags.
+2. **Init:** The `init` message contains a browser-profile UUID (`initID`) and an optional `wantRunning` hint. The helper creates or reuses only that profile's `tsnet.Server`, with state stored at `~/.config/tailscale-browser-ext/<initID>/`. macOS keeps the profile resident without merging it with other Chrome or Firefox profiles. Because `tsnet.Start` forces `WantRunning=true`, the host applies `WantRunning=false` right after starting a fresh server when the hint is `false`.
 3. **State watching:** Host starts a goroutine (`watchIPNBus`) that monitors the IPN notification bus for state, prefs, netmap, browse-to-URL, and health changes. On any change, it fetches full status and sends a `StatusUpdate` to the extension.
 4. **Proxy routing:** The background service worker receives the status, passes it to the `ProxyManager`, which configures browser-level proxy rules (PAC script on Chrome, `proxy.onRequest` on Firefox).
 5. **Popup:** When the user opens the popup, it connects via a `chrome.runtime.Port` named `"popup"`. The background immediately sends current `TailscaleState`. User actions dispatch `BackgroundMessage` types which the background translates to `NativeRequest` commands.
+6. **Optional local-app proxy (macOS):** The Advanced toggle asks the daemon to bind a second authenticated loopback listener. It supports HTTP proxying, HTTPS through CONNECT, and SOCKS5. It dials through the profile that enabled it, ignores browser split/bypass configuration, and stays available after the browser closes.
 
 ---
 
@@ -113,6 +113,7 @@ Each browser profile gets its own isolated Tailscale identity, meaning you can b
 - **Per-profile isolation** -- each browser profile gets its own independent Tailscale node and identity
 - **Exit nodes** -- route all browser traffic through any exit node on your tailnet, with a "Best available" Recommended row in the picker that picks a nearby Mullvad location when one is available
 - **Split-tunneling** -- per-profile domain rules (Bypass / Only) that exempt specific domains from the exit node or restrict the exit node to a chosen domain set; rules are suffix-matched and applied after Tailscale-mandatory routes (MagicDNS, 100.64.0.0/10, subnet routes) so tailnet traffic is never affected
+- **Local-app proxy (macOS)** -- an opt-in resident, authenticated HTTP(S)/SOCKS5 loopback listener for applications such as Nextcloud; all submitted traffic uses the enabling profile's Tailscale routes, with no browser filtering and no direct fallback
 - **MagicDNS** -- resolve tailnet device names automatically
 - **Split DNS** -- resolve restricted domains through nameservers supplied by Tailscale or Headscale, including nameservers reachable over subnet routes
 - **Subnet routing** -- access resources behind subnet routers (auto-detected from peer info)
@@ -189,6 +190,10 @@ Communication uses the Chrome native messaging wire format: a **4-byte little-en
 | `bug-report`        | `note?: string`                                 | Generate bug report                              |
 | `netcheck`          | --                                              | Return the helper's current netcheck availability diagnostic |
 | `logout`            | --                                              | Log out of current Tailscale account             |
+| `get-external-proxy-status` | --                                      | Get non-secret local-app proxy status             |
+| `set-external-proxy` | `enabled: boolean`                              | Enable or disable the macOS local-app proxy       |
+| `reveal-external-proxy` | --                                           | Return connection fields and password to the requesting popup |
+| `rotate-external-proxy-credentials` | --                              | Replace the password and close existing sessions |
 
 
 ### Replies (Host -> Extension)
@@ -196,7 +201,7 @@ Communication uses the Chrome native messaging wire format: a **4-byte little-en
 
 | Reply Field          | When Sent                           | Payload                                         |
 | -------------------- | ----------------------------------- | ----------------------------------------------- |
-| `procRunning`        | Immediately on host startup         | `{ port, pid, version, proxyAuth, supportsNetcheck?, supportsPingPeer?, supportsLogin?, supportsCustomControlURL?, error? }` |
+| `procRunning`        | After the initial profile is selected | `{ port, pid, version, proxyAuth, supportsNetcheck?, supportsPingPeer?, supportsLogin?, supportsCustomControlURL?, supportsDaemonControl?, supportsExternalProxy?, error? }` |
 | `init`               | After `init` command                | `{ error? }`                                    |
 | `pong`               | After `ping`                        | `{}`                                            |
 | `status`             | After state changes or `get-status` | Full `StatusUpdate` object                      |
@@ -204,6 +209,7 @@ Communication uses the Chrome native messaging wire format: a **4-byte little-en
 | `exitNodeSuggestion` | After `suggest-exit-node`           | `{ id, hostname, location? }`                   |
 | `fileSendProgress`   | During file send                    | `{ targetNodeID, name, percent, done, error? }` |
 | `diagnostic`         | After `ping-peer`, `netcheck`, or `bug-report` | `{ title, body }`                       |
+| `externalProxy`      | After an external-proxy command     | `{ enabled, running, host, port?, protocols, authRequired, username?, password?, error? }`; `password` appears only for reveal/rotation |
 | `error`              | On command failure                  | `{ cmd, message }`                              |
 
 `bug-report` is accepted by the Go host protocol. The current TypeScript
@@ -372,10 +378,13 @@ The native host is a Go binary at `host/` using `tailscale.com/tsnet` pinned to 
 
 | File | Purpose |
 | --- | --- |
-| `main.go` | Entry point, proxy startup, and native messaging mode |
+| `main.go` | Entry point, install/service commands, macOS bridge selection, and legacy in-process native messaging mode |
 | `cli.go` | Explicit install/uninstall/version command parsing and legacy setup compatibility |
 | `host.go` | Framing loop, synchronized tsnet session lifecycle, request dispatch, prefs/login/diagnostic handlers, and bounded status replies |
 | `protocol.go` | Wire protocol types and 1 MiB message limit |
+| `daemon_darwin.go` / `daemon_other.go` | Per-user macOS daemon, authenticated bridge socket, per-profile runtime registry, persisted run intent, and non-macOS stubs |
+| `service_darwin.go` / `service_other.go` | LaunchAgent installation/removal and non-macOS stubs |
+| `external_proxy.go` | Stable authenticated app listener, protected configuration, credential rotation, and active-session revocation |
 | `status.go` | Retrying IPN bus watcher, debounced refresh, cached notification state, and `StatusUpdate` construction |
 | `proxy.go` / `proxy_policy.go` | SOCKS5/HTTP multiplexing, authenticated destination policy, lazy quad-100 web client, and buffered CONNECT tunneling |
 | `dns.go` / `exit_dns.go` | Restricted split-DNS forwarding and exit-node DNS behavior |
@@ -389,16 +398,17 @@ The native host is a Go binary at `host/` using `tailscale.com/tsnet` pinned to 
 
 ### Lifecycle
 
-1. **Browser launches the host** via native messaging (stdin/stdout). Not a terminal -- goes directly to messaging mode.
-2. **Proxy starts** on `127.0.0.1:0`. The port is sent back to the extension via `procRunning`.
-3. **Extension sends `init`** with a profile identifier restricted to 1-64 ASCII letters, numbers, underscores, or hyphens. Host creates a `tsnet.Server` at `~/.config/tailscale-browser-ext/<ID>/` and atomically installs it as the current session.
-4. **IPN bus watcher** monitors state, prefs, netmap, browse-to-URL, and health changes. Errors trigger bounded exponential retries; each change schedules a debounced full `StatusUpdate` from the same session snapshot.
-5. **Host reads commands** in a loop from stdin, dispatches to handlers, and writes replies to stdout.
-6. **On stdin EOF** (browser closed), the host cancels the watcher and active Taildrop transfers, closes the tsnet server, and exits cleanly.
+1. **Installation on macOS** creates and bootstraps `~/Library/LaunchAgents/org.tesseras.tailchrome.helper.plist`, which runs the registered binary with `daemon`. Other platforms retain browser-lifetime hosting.
+2. **Browser launches the native host** via stdin/stdout and sends `init` first. On macOS the process authenticates to the daemon with a protected token and becomes a byte bridge; without an installed daemon it uses the legacy in-process path.
+3. **Profile selection and proxy startup:** the daemon binds the bridge permanently to the supplied profile ID, creates or reuses that profile's `Host`, and starts its random authenticated browser proxy. Different profiles never share a `Host`, browser credential, listener, or tsnet state.
+4. **Extension receives `procRunning`** for its selected profile, including the browser proxy endpoint and daemon/external-proxy capabilities.
+5. **Host initializes `tsnet`** at `~/.config/tailscale-browser-ext/<ID>/`, restores the saved run intent, and keeps the session resident on macOS after all browser bridges close.
+6. **IPN bus watcher** monitors state, prefs, netmap, browse-to-URL, and health changes. Errors trigger bounded exponential retries; each change schedules a debounced full `StatusUpdate` from the same session snapshot.
+7. **On browser EOF,** the bridge exits. On macOS the daemon-owned profile and optional app listener remain; elsewhere the in-process host shuts down its session.
 
 ### Proxy Architecture
 
-The proxy uses Tailscale's `proxymux.SplitSOCKSAndHTTP()` to multiplex a single listener:
+The helper uses Tailscale's `proxymux.SplitSOCKSAndHTTP()` to multiplex each loopback listener:
 
 - **SOCKS5 traffic** is handled by `tailscale.com/net/socks5`, with authentication and the helper's destination policy applied before dialing.
 - **HTTP traffic** is handled by an `httputil.ReverseProxy` with the same authentication and destination checks.
@@ -407,11 +417,23 @@ The proxy uses Tailscale's `proxymux.SplitSOCKSAndHTTP()` to multiplex a single 
 
 All three proxy paths resolve restricted DNS domains through configured IP nameservers, validating both the nameserver route and returned IPs against the current session's routing policy before dialing. The IPN watcher sends authoritative restricted domains as `dnsRoutes`, retaining `splitDNSDomains` for compatibility; disabling `corpDNS` or removing a route clears the corresponding browser routing. An omitted `dnsRoutes` field indicates that configuration is not yet known and preserves existing protection. See [Split DNS](split-dns.md) for setup and nameserver routing requirements.
 
-The loopback proxy requires a fresh random credential on every helper launch. Chrome uses authenticated HTTP proxying; Firefox uses authenticated SOCKS5. Credentials stay in the background proxy manager and are excluded from popup state, storage, and diagnostics. The helper also validates destinations against its current network map and preferences before dialing. See [SECURITY.md](SECURITY.md#local-proxy-trust-boundary).
+Each browser-profile listener requires a fresh random credential when that
+profile runtime starts. Chrome uses authenticated HTTP proxying; Firefox uses
+authenticated SOCKS5. Browser credentials stay in the background proxy manager
+and are excluded from popup state, storage, and diagnostics.
+
+The macOS local-app listener is separate: it has a stable loopback port, fixed
+username `tailchrome`, and a stable random per-install password. Its owner is
+the profile that enabled it. Ordinary status omits the password; reveal and
+rotation replies go only to the requesting popup, and rotation or disable
+closes established sessions. It cannot serve `100.100.100.100` as the local web
+client. Both listener types apply the helper's authoritative destination
+policy, but only the browser decides domain split/bypass before using its own
+listener. See [SECURITY.md](SECURITY.md#local-proxy-trust-boundary).
 
 ### Auto-Installation
 
-Running the raw host without a command in a terminal retains legacy setup: it copies itself to the historical per-user helper directory and registers all supported browsers. New installers place the executable at their stable path and invoke `install --binary-path PATH`. This direct command registers Chrome, Firefox, and detected optional browsers without making another executable copy. See [helper installation](helper-installation.md) for explicit browser selection and legacy compatibility.
+Running the raw host without a command in a terminal retains legacy setup: it copies itself to the historical per-user helper directory and registers all supported browsers. New installers place the executable at their stable path and invoke `install --binary-path PATH`. This direct command registers Chrome, Firefox, and detected optional browsers without making another executable copy; on macOS it also installs or repairs the per-user LaunchAgent. Uninstall unloads the agent and removes its socket, bridge token, daemon run-state map, app-proxy configuration, and log while preserving per-profile Tailscale identity directories. See [helper installation](helper-installation.md) for explicit browser selection and legacy compatibility.
 
 ---
 
@@ -518,6 +540,9 @@ interface TailscaleState {
   supportsPingPeer: boolean;
   supportsLogin: boolean;
   supportsCustomControlURL: boolean;
+  supportsDaemonControl: boolean;
+  supportsExternalProxy: boolean;
+  externalProxy: ExternalProxyStatus | null; // Non-secret status only
   reconnecting: boolean;
   autoConnectOnStart: boolean;
 }
@@ -534,6 +559,7 @@ interface TailscaleState {
 
 - `{ type: "state", state: TailscaleState }` -- full state push
 - `{ type: "toast", message, level: "info"|"error", persistent? }` -- notification
+- `{ type: "external-proxy-details", details }` -- one requesting popup receives revealed/rotated credentials; never part of state broadcast
 
 **BackgroundMessage** (popup -> background):
 
@@ -544,6 +570,8 @@ interface TailscaleState {
   `set-auto-connect-on-start`
 - Profiles and diagnostics: `switch-profile`, `new-profile`,
   `delete-profile`, `ping-peer`, and `netcheck`
+- macOS local apps: `set-external-proxy`, `reveal-external-proxy`, and
+  `rotate-external-proxy-credentials`
 - Files and navigation: `send-file`, `suggest-exit-node`, `open-admin`, and
   `open-web-client`
 
@@ -623,6 +651,8 @@ does not participate in routing.
 |   Advanced             [toggle]  |
 |     Run as Exit Node   [toggle]  |
 |     Local node page: Open       >|
+|     Local app proxy    [toggle]  |
+|       [Reveal details] [Rotate]   |
 |     Coordination server         >|
 |   Advertise subnets    [toggle]  |
 |   Profile: [name] (optional)   > |
@@ -652,6 +682,14 @@ URL editor. A **Profile** row is added when `state.profiles` is non-empty and
 opens the profile switcher. **Admin Console** appears only for Tailscale's
 default coordination server, and the helper-version footer row appears only
 after the host reports a version.
+
+When the helper advertises `supportsExternalProxy`, **Local app proxy** appears
+inside Advanced. Enabling it does not reveal secrets. **Reveal connection
+details** requests host, port, username, password, HTTP(S) URL, and SOCKS5 URL
+for that popup only, with a copy control beside every value. **Rotate password**
+replaces the password, closes current app sessions, and returns the new details
+to the requesting popup. Unsupported helpers show a capability-gated update
+message without disabling existing browser features.
 
 ---
 
@@ -714,6 +752,12 @@ of their own executable. Install and registration repair use the same entry
 point. Windows signature status follows the release's recorded signing mode;
 see [the policy](WINDOWS_CODE_SIGNING_POLICY.md).
 
+Every macOS registration path also writes and bootstraps the current user's
+LaunchAgent. The same helper binary runs with the `daemon` subcommand; native
+messaging launches authenticate and bridge to it. Runtime files are kept under
+`~/Library/Application Support/Tailchrome/`, and uninstall removes those
+service/control files while preserving the node identities below.
+
 Legacy installer flags remain compatible and retain their historical staging
 behavior. Existing native-host names and extension IDs are unchanged. The new
 `uninstall` command removes registrations owned by its executable; the installer
@@ -732,6 +776,9 @@ Per-profile Tailscale state is stored at:
 ```
 
 Each browser profile generates a UUID on first connection, stored in `chrome.storage.local` as `profileId`.
+The macOS daemon persists a map of those UUIDs to their last requested run state
+and restores each UUID as a separate resident `Host`; it never substitutes one
+browser's UUID for another.
 
 Native installations keep this historical location even when browser manifest
 registration uses XDG paths. Chrome Flatpak uses its sandbox's writable XDG
@@ -810,6 +857,11 @@ tailchrome/
 |   +-- cli.go                        # Explicit install/uninstall/version CLI
 |   +-- host.go                       # Host struct, message loop, handlers
 |   +-- protocol.go                   # Wire protocol types
+|   +-- daemon_darwin.go              # Resident per-profile macOS runtime + bridge
+|   +-- daemon_other.go               # Non-macOS bridge/service stubs
+|   +-- service_darwin.go             # Per-user LaunchAgent lifecycle
+|   +-- service_other.go              # Non-macOS service stubs
+|   +-- external_proxy.go             # App proxy config, listener, and revocation
 |   +-- status.go                     # IPN bus watcher
 |   +-- proxy.go                      # SOCKS5/HTTP proxy
 |   +-- proxy_policy.go               # Authenticated destination policy
@@ -1244,7 +1296,10 @@ a signing failure. See
 
 ### Proxy Scope
 
-- Only browser traffic is proxied -- system networking is never modified
+- Browser traffic is proxied only when the browser routing policy selects it.
+  On macOS, local applications can separately opt in by configuring the
+  explicit app-proxy endpoint. System routes and unconfigured apps are never
+  modified or captured
 - The proxy binds to `127.0.0.1` only (not exposed to the network)
 - Suspending Chrome's MV3 worker does not clear Tailchrome's mandatory PAC.
   Chrome removes its proxy setting only when Tailchrome's effective policy
@@ -1254,7 +1309,9 @@ a signing failure. See
 - If an already protected route loses the helper, its authentication session,
   or its selected exit node, protected requests remain fail-closed (while
   split-tunnel exceptions remain direct) instead of falling through
-- HTTP and SOCKS5 proxy connections require credentials generated for the helper process and delivered to the extension through native messaging
+- HTTP and SOCKS5 proxy connections always require credentials. Browser
+  credentials are ephemeral per profile runtime; app credentials are stable
+  per installation until rotation and are revealed only on request
 
 ### Web Client Authorization
 
@@ -1273,6 +1330,13 @@ mutation is still running.
 ### Native Messaging
 
 Native messaging is restricted to the declared extension IDs in the native host manifest. The Chrome manifest uses `allowed_origins`, Firefox uses `allowed_extensions`.
+
+On macOS, the native-messaging process does not expose the daemon socket to the
+extension directly. It authenticates with the installation's random bridge
+token, forwards the framed stream, and exits with the browser port. The daemon
+requires `init` as the first native request, selects that exact per-browser
+runtime before returning `procRunning`, and rejects an attempt to change the
+profile on the same bridge.
 
 ---
 
@@ -1295,6 +1359,9 @@ Native messaging is restricted to the declared extension IDs in the native host 
 | `helperRegistrationRepairAvailable`       | Browser session storage | Session-scoped registration-repair promotion                        |
 | `routingProtectionV1`                     | Browser local storage   | Sanitized account-scoped routing snapshots and transition state; excludes helper ports and credentials |
 | `~/.config/tailscale-browser-ext/<UUID>/` | Filesystem              | tsnet state directory (keys, config)                               |
+| `~/Library/Application Support/Tailchrome/daemon.json` | macOS filesystem | Per-profile resident run intent; mode `0600` |
+| `~/Library/Application Support/Tailchrome/bridge.token` | macOS filesystem | Random browser-to-daemon authentication token; mode `0600` |
+| `~/Library/Application Support/Tailchrome/external-proxy.json` | macOS filesystem | App-proxy enabled state, owner profile ID, stable port, username, and random password; mode `0600` |
 
 
 ### Data Transmitted
@@ -1302,6 +1369,7 @@ Native messaging is restricted to the declared extension IDs in the native host 
 When enabled, Tailchrome transmits:
 
 - Browsing activity and website content needed for proxy/exit-node traffic
+- Traffic from local applications explicitly configured to use the optional macOS app proxy
 - Authentication data for login to Tailscale or the configured custom coordination server
 - Device and network metadata for peer discovery
 - User-initiated file contents for Taildrop transfers

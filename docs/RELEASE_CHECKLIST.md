@@ -141,6 +141,14 @@ while this follow-up is completed.
 - [ ] Failed registration, interrupted writes, concurrent installs and locked Windows executables preserve recovery data.
 - [ ] Homebrew opt paths survive upgrade and cleanup without a stale runtime copy.
 - [ ] macOS ZIP launch establishes a stable signed app location and rolls back a failed upgrade.
+- [ ] Every macOS install/repair path creates and starts the current user's `org.tesseras.tailchrome.helper` LaunchAgent; upgrade restarts it with the newly installed binary.
+- [ ] Chrome and Firefox profiles connected to the resident helper retain distinct node identities, state directories, browser proxy ports, and credentials across simultaneous use and daemon restart.
+- [ ] Closing all browsers leaves the requested macOS profile state resident; reopening a profile reconnects to that profile without replacing another profile's identity.
+- [ ] The local-app proxy is off by default, binds only `127.0.0.1`, accepts authenticated HTTP/CONNECT and SOCKS5, rejects unauthenticated requests, and never exposes the local node web client.
+- [ ] Local-app traffic follows the owning profile's Tailscale destination policy without consulting browser split/bypass rules or falling back to a direct socket.
+- [ ] The app-proxy port and password survive daemon restart; ordinary status and diagnostics omit the password; reveal sends it only to the requesting popup.
+- [ ] Disabling the app proxy and rotating its password close existing connections. Disable then enable from another browser profile changes ownership without merging profile identities.
+- [ ] macOS uninstall unloads the LaunchAgent and removes its plist, socket, bridge token, run-state map, app-proxy config, and log while preserving per-profile Tailscale identity directories.
 - [ ] New package/script uninstallers preserve the replacement owner's registrations. When migrating from v0.1.13 or older, remove the old package first or rerun the new helper's registration after removal.
 - [ ] Custom XDG/browser-data paths and first-use browser registration work.
 - [ ] Chrome Flatpak install, helper launch, login, routing, upgrade and uninstall pass on a Linux machine supporting its namespaces; native registrations and state remain intact.

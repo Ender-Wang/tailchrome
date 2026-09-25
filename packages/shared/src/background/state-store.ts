@@ -36,6 +36,9 @@ const DEFAULT_STATE: TailscaleState = {
   supportsPingPeer: false,
   supportsLogin: false,
   supportsCustomControlURL: false,
+  supportsDaemonControl: false,
+  supportsExternalProxy: false,
+  externalProxy: null,
   reconnecting: false,
   autoConnectOnStart: false,
 };

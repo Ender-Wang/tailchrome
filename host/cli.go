@@ -23,6 +23,7 @@ const (
 	commandLegacyInstall
 	commandLegacyInstallNow
 	commandLegacyUninstall
+	commandDaemon
 )
 
 type parsedCommand struct {
@@ -64,6 +65,11 @@ func parseCommand(args []string) (parsedCommand, error) {
 		return parsedCommand{Kind: commandHelp}, nil
 	}
 	switch args[0] {
+	case "daemon":
+		if len(args) != 1 {
+			return parsedCommand{}, errors.New("daemon does not accept arguments")
+		}
+		return parsedCommand{Kind: commandDaemon}, nil
 	case "install":
 		if hasHelpArg(args[1:]) {
 			return parsedCommand{Kind: commandHelp}, nil

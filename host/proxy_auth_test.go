@@ -168,3 +168,23 @@ func TestProxyAuthProbeWorksBeforeTSNetStarts(t *testing.T) {
 		t.Fatalf("probe response: %d %q %v", res.Code, res.Body.String(), res.Header())
 	}
 }
+
+func TestProxyAuthProbeIsNotExposedByExternalProxy(t *testing.T) {
+	h := newHost(nil, nil)
+	h.proxyAuth = &ProxyAuth{Version: 1, Username: "user", Password: "secret"}
+	dialed := false
+	h.proxyDial = func(context.Context, string, string) (net.Conn, error) {
+		dialed = true
+		return nil, fmt.Errorf("expected test dial failure")
+	}
+	req := httptest.NewRequest("HEAD", "http://tailchrome-proxy-auth.invalid/", nil)
+	req.Header.Set("Proxy-Authorization", proxyAuthorization(h))
+	res := httptest.NewRecorder()
+	h.httpProxyHandlerWithAuth(h.proxyAuth, false).ServeHTTP(res, req)
+	if !dialed {
+		t.Fatal("external proxy handled the browser authentication probe locally")
+	}
+	if res.Code == http.StatusNoContent {
+		t.Fatalf("external proxy returned browser probe response: %d", res.Code)
+	}
+}

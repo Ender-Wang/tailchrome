@@ -26,6 +26,12 @@ Open that app in each account to register or repair discovery. Starting with
 v0.1.14, registration points directly at the system package payload. Older
 releases create a separate per-user runtime copy.
 
+Registration also installs a per-user LaunchAgent that keeps each browser
+profile's independent Tailchrome node available after the browser closes. On
+macOS, the extension can use that daemon to enable a separate authenticated
+HTTP(S)/SOCKS5 loopback proxy for local applications. Formula users receive the
+same LaunchAgent when they run the v0.1.14-or-later registration command.
+
 Disconnect Tailchrome and close browsers before upgrading:
 
 ```bash

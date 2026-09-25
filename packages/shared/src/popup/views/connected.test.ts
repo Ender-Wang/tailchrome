@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { baseState } from "../../__test__/fixtures";
 import { sendMessage } from "../popup";
-import { renderConnected, updateConnected } from "./connected";
+import { renderConnected, setExternalProxyDetails, updateConnected } from "./connected";
 
 vi.mock("../popup", () => ({
   sendMessage: vi.fn(),
@@ -14,6 +14,7 @@ vi.mock("../popup", () => ({
 describe("connected view", () => {
   beforeEach(() => {
     vi.mocked(sendMessage).mockClear();
+    document.body.textContent = "";
   });
 
   it("renders Exit Node and Profile navigation as native buttons", () => {
@@ -199,5 +200,73 @@ describe("connected view", () => {
       type: "set-domain-split",
       config: { mode: "only", domains: ["internal.example.com"] },
     });
+  });
+
+  it("capability-gates the macOS local app proxy and sends toggle commands", () => {
+    const unsupported = document.createElement("div");
+    renderConnected(unsupported, baseState({ supportsExternalProxy: false }));
+    expect(unsupported.textContent).toContain("Helper update required");
+
+    const root = document.createElement("div");
+    renderConnected(
+      root,
+      baseState({
+        supportsExternalProxy: true,
+        externalProxy: {
+          enabled: false,
+          running: false,
+          host: "127.0.0.1",
+          protocols: ["http", "socks5"],
+          authRequired: true,
+        },
+      }),
+    );
+    const toggle = root.querySelector<HTMLInputElement>(
+      "[data-external-proxy-row] input",
+    )!;
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change"));
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: "set-external-proxy",
+      enabled: true,
+    });
+  });
+
+  it("reveals copyable app proxy details without placing them in state", () => {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    renderConnected(
+      root,
+      baseState({
+        supportsExternalProxy: true,
+        externalProxy: {
+          enabled: true,
+          running: true,
+          host: "127.0.0.1",
+          port: 12345,
+          protocols: ["http", "socks5"],
+          authRequired: true,
+          username: "tailchrome",
+        },
+      }),
+    );
+    setExternalProxyDetails({
+      enabled: true,
+      running: true,
+      host: "127.0.0.1",
+      port: 12345,
+      protocols: ["http", "socks5"],
+      authRequired: true,
+      username: "tailchrome",
+      password: "secret",
+    });
+    const details = root.querySelector<HTMLElement>("[data-external-proxy-details]")!;
+    expect(details.textContent).toContain("Password: secret");
+    expect(details.textContent).toContain(
+      "http://tailchrome:secret@127.0.0.1:12345",
+    );
+    expect(details.textContent).toContain(
+      "socks5://tailchrome:secret@127.0.0.1:12345",
+    );
   });
 });

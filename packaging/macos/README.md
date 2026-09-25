@@ -28,7 +28,14 @@ The script `build-pkg.sh` builds both installers. The system package
 2. **Tailchrome Helper** in `/Applications` — a repair/re-run fallback app.
 
 The package postinstall script registers its installed executable directly
-with `install --binary-path` for the logged-in console user.
+with `install --binary-path` for the logged-in console user. Registration also
+creates and starts the per-user LaunchAgent
+`~/Library/LaunchAgents/org.tesseras.tailchrome.helper.plist`. The daemon keeps
+each browser profile's independent Tailscale node and the opt-in local-app
+proxy available independently of browser lifetime; browser native-messaging
+launches attach to their own profile through a protected Unix socket instead
+of creating a second node. The app proxy belongs to the profile that enables
+it and never consumes browser split-tunneling or bypass rules.
 
 If browser discovery is later damaged, open
 `/Applications/Tailchrome Helper.app`. The signed app launches the installed
@@ -132,7 +139,8 @@ $HOME/.local/bin/tailchrome
 ```
 
 It invokes the verified helper with `install --binary-path` at that final
-location. The app, script, system package and Homebrew are separate installation
+location. On macOS this also installs or repairs the same per-user LaunchAgent.
+The app, script, system package and Homebrew are separate installation
 methods; choose one per account.
 
 ## Uninstall
@@ -165,6 +173,10 @@ Then move `~/Applications/Tailchrome Helper.app` to the Trash. For the script:
 ```bash
 bash ./tailchrome-install.sh --uninstall
 ```
+
+The helper's uninstall command unloads the LaunchAgent and removes its plist,
+Unix socket, bridge token, daemon settings, and local-app proxy credential. It
+does not remove the existing `tsnet` identity.
 
 These new commands preserve other methods' registrations and node identities.
 For v0.1.13 and older, use that release's `-uninstall` command before switching

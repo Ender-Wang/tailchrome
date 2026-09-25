@@ -10,7 +10,7 @@
 
 ## What The Extension Does
 
-Tailchrome connects a Firefox browser profile to the user's Tailscale tailnet without changing system-wide networking. The extension manages browser proxy behavior, exposes the popup UI, and talks to a local native helper via native messaging. The native helper runs the Tailscale node and local proxy for that browser profile.
+Tailchrome connects a Firefox browser profile to the user's Tailscale tailnet without changing system-wide networking. The extension manages browser proxy behavior, exposes the popup UI, and talks to a local native helper via native messaging. The native helper runs an independent Tailscale node and browser proxy for that profile. On macOS only, the Advanced UI can also ask the resident helper to expose an opt-in authenticated HTTP(S)/SOCKS5 loopback proxy for local applications; this does not add browser permissions or apply Firefox split-tunneling rules to app traffic.
 
 ## Permission Justification
 

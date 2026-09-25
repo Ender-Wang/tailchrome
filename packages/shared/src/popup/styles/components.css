@@ -63,6 +63,20 @@
   gap: var(--space-xs);
 }
 
+.external-proxy-details {
+  padding: 4px 12px 10px;
+}
+
+.external-proxy-details .status-bar-row {
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.external-proxy-details .status-bar-ip {
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .status-bar-hostname {
   font-size: var(--font-size-xs);
   color: var(--text-tertiary);

@@ -20,12 +20,13 @@ Tailchrome connects your browser to your Tailscale tailnet without installing a 
 - Custom coordination server: point your browser's node at a self-hosted control server (such as Headscale) instead of Tailscale's default
 - Side panel mode: opt-in toggle keeps the Tailchrome UI docked next to your tabs instead of dismissing on click-away
 - Auto-connect on start: optional toggle that brings your tailnet up automatically when the browser launches
-- No system networking changes: only browser traffic is affected
+- No system networking changes: browser traffic is profile-scoped, and macOS apps opt in explicitly
 - Shields Up mode for extra security
 - Works in Chrome and other Chromium-family browsers (Brave, Edge, Vivaldi, Opera; Arc on macOS)
+- Optional authenticated HTTP(S)/SOCKS5 proxy for local apps on macOS
 
 **How it works:**
-Tailchrome uses a lightweight native helper app that runs a full Tailscale node for each browser profile. Your system networking stays untouched. Only traffic from the browser is routed through your tailnet.
+Tailchrome uses a lightweight native helper app that runs a full Tailscale node for each browser profile. Your system networking stays untouched. Browser routing is profile-scoped; on macOS, local apps can also opt into a separate authenticated loopback proxy.
 
 **Getting started:**
 1. Install the extension
@@ -64,12 +65,13 @@ Tailchrome connects Firefox to your Tailscale tailnet without a system VPN. Each
 - Auto-connect on start: optional toggle to bring the tailnet up automatically on browser launch
 - Zero system networking changes
 - Shields Up mode
+- Optional authenticated HTTP(S)/SOCKS5 proxy for local apps on macOS
 
 **Setup:**
 Install the extension, download the helper installer, and log in. The helper app is a small native program that runs a Tailscale node per browser profile. Setup takes about 30 seconds.
 
 **How it works:**
-A native messaging host runs locally and manages Tailscale connections per profile. Only Firefox traffic is routed through your tailnet. Your system networking is never modified.
+A native messaging host runs locally and manages Tailscale connections per profile. Firefox routing remains profile-scoped. On macOS, local apps can separately opt into an authenticated loopback proxy; system networking is never modified.
 
 **Open Source:**
 Source code is available at https://github.com/dantraynor/tailchrome
