@@ -28,7 +28,7 @@ On macOS, the resident helper stores its per-profile run-state map, a random
 bridge token, and the optional local-app proxy configuration under
 `~/Library/Application Support/Tailchrome/`. The directory is accessible only
 to the current operating-system account; secret files use mode `0600`. The
-local-app configuration contains its stable loopback port, fixed username,
+local-app configuration contains its stable port, LAN-listening preference, fixed username,
 random per-install password, enabled state, and owning browser-profile
 identifier. The password is not written to browser storage or diagnostics.
 

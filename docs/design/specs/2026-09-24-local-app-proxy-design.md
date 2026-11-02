@@ -24,6 +24,10 @@ The change must preserve Tailchrome's existing isolation and routing contract:
 
 ## Decision
 
+The [optional LAN-access extension](2026-1102-01-lan-app-proxy.md) tracks the
+subsequent addition of trusted-network clients. Localhost remains the default;
+that document records the opt-in wildcard binding and its exposure boundaries.
+
 On macOS, helper registration installs a per-user LaunchAgent that runs the
 same helper binary with the `daemon` subcommand. Browser-launched native hosts
 become short-lived stdin/stdout bridges to that daemon. The daemon owns a

@@ -747,6 +747,7 @@ export function initBackground(
           supportsCustomControlURL: false,
           supportsDaemonControl: false,
           supportsExternalProxy: false,
+          supportsExternalProxyLAN: false,
           externalProxy: null,
         });
       } else {
@@ -762,6 +763,7 @@ export function initBackground(
           supportsCustomControlURL: msg.procRunning.supportsCustomControlURL === true,
           supportsDaemonControl: msg.procRunning.supportsDaemonControl === true,
           supportsExternalProxy: msg.procRunning.supportsExternalProxy === true,
+          supportsExternalProxyLAN: msg.procRunning.supportsExternalProxyLAN === true,
         });
         if (msg.procRunning.supportsExternalProxy === true) {
           nativeHost.send({ cmd: "get-external-proxy-status" });
@@ -1070,6 +1072,7 @@ export function initBackground(
       supportsCustomControlURL: false,
       supportsDaemonControl: false,
       supportsExternalProxy: false,
+      supportsExternalProxyLAN: false,
       externalProxy: null,
     });
   }
@@ -1716,6 +1719,15 @@ export function initBackground(
       case "reveal-external-proxy": {
         pendingExternalProxyPort = sourcePort ?? null;
         nativeHost.send({ cmd: "reveal-external-proxy" });
+        break;
+      }
+
+      case "set-external-proxy-lan": {
+        if (state.supportsExternalProxyLAN) {
+          nativeHost.send({ cmd: "set-external-proxy-lan", allowLAN: msg.allowLAN });
+        } else {
+          sendToastToPopup("Please update the macOS helper to enable LAN access.", "error");
+        }
         break;
       }
 

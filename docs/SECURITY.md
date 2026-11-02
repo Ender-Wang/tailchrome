@@ -59,7 +59,15 @@ Helper diagnostic reports are generated only when the user clicks the copy or ex
 
 The browser proxy listens on a randomly assigned `127.0.0.1` port and requires a fresh random credential on every helper launch. Credentials are sent over native messaging and held only by the background proxy manager, outside popup state, storage, and diagnostics. Chromium uses authenticated HTTP proxying; Firefox uses authenticated SOCKS5.
 
-On macOS, users may opt in to a separate mixed HTTP/SOCKS5 listener for local apps. It has an independent stable port and a per-install random password stored in a mode-`0600` file inside a mode-`0700` directory. Authentication is mandatory. The extension keeps non-secret status only; it requests the password on demand and returns it solely to the popup that requested reveal or rotation. Disabling the listener or rotating its password closes established sessions. The listener binds only to `127.0.0.1` and does not expose the helper's local web client.
+On macOS, users may opt in to a separate mixed HTTP/SOCKS5 listener for local apps. It has an independent stable port and a per-install random password stored in a mode-`0600` file inside a mode-`0700` directory. Authentication is mandatory. The extension keeps non-secret status only; it requests the password on demand and returns it solely to the popup that requested reveal or rotation. Disabling the listener or rotating its password closes established sessions. The listener defaults to `127.0.0.1` and does not expose the helper's local web client.
+
+The optional **Allow devices on the local network** control changes only the
+app proxy to IPv4 `0.0.0.0`. It accepts traffic on all reachable IPv4 interfaces,
+subject to the firewall; the displayed private addresses are suggestions, not
+a client allowlist. Authentication remains mandatory, but HTTP Basic and SOCKS5
+credentials are unencrypted on the client-to-Mac hop. Use LAN mode only on
+trusted networks. Scope changes revoke active sessions. Neither scope exposes
+the browser's local web client or authentication probe.
 
 The macOS LaunchAgent accepts browser bridges on a mode-`0600` Unix socket and
 requires a random mode-`0600` bridge token before native-message framing begins.

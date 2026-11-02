@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -49,6 +50,81 @@ func TestExternalProxyConfigIsStableAndProtected(t *testing.T) {
 	}
 }
 
+func TestExternalProxyLANScopePersistsAndRevokesSessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "external-proxy.json")
+	h := newHost(nil, nil)
+	p, err := newExternalProxy(h, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.close() })
+	if p.status(false).AllowLAN || p.status(false).Host != "127.0.0.1" {
+		t.Fatal("new config must default to localhost")
+	}
+	if err := p.setAllowLAN(true, "owner"); err == nil {
+		t.Fatal("disabled proxy accepted LAN mode")
+	}
+	if err := p.setEnabledFor(true, "owner", h); err != nil {
+		t.Fatal(err)
+	}
+	before := p.status(true)
+	if err := p.setAllowLAN(true, "other"); err == nil {
+		t.Fatal("non-owner changed LAN scope")
+	}
+	old := p.listener
+	conn, err := net.Dial("tcp4", net.JoinHostPort("127.0.0.1", fmt.Sprint(before.Port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// Complete the SOCKS greeting to ensure the connection was accepted.
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Write([]byte{5, 1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, 2)
+	if _, err := io.ReadFull(conn, response); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.setAllowLAN(true, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Read(response); err == nil {
+		t.Fatal("scope change retained old session")
+	}
+	after := p.status(true)
+	if !after.AllowLAN || after.Host != "0.0.0.0" || after.Port != before.Port || after.Password != before.Password {
+		t.Fatal("scope change altered port/credentials or did not enable wildcard")
+	}
+	if !old.closed || p.listener.Addr().(*net.TCPAddr).IP.To4() == nil {
+		t.Fatal("scope change did not revoke old listener or use IPv4")
+	}
+	p.close()
+	restored, err := newExternalProxy(h, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.close()
+	if !restored.status(false).AllowLAN || !restored.status(false).Running {
+		t.Fatal("LAN mode not restored")
+	}
+	if err := restored.setAllowLAN(false, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if restored.listener.Addr().(*net.TCPAddr).IP.String() != "127.0.0.1" {
+		t.Fatal("LAN off did not restore localhost")
+	}
+	if err := restored.setAllowLAN(true, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.setEnabledFor(false, "owner", h); err != nil {
+		t.Fatal(err)
+	}
+	if restored.status(false).AllowLAN {
+		t.Fatal("disabling proxy retained LAN opt-in")
+	}
+}
+
 func TestExternalProxyAuthenticatesSOCKS5(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "socks-ok")
@@ -67,12 +143,19 @@ func TestExternalProxyAuthenticatesSOCKS5(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.setEnabled(true); err != nil {
+	if err := p.setEnabledFor(true, "owner", h); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = p.close() })
+	if err := p.setAllowLAN(true, "owner"); err != nil {
+		t.Fatal(err)
+	}
 	status := p.status(true)
-	dialer, err := proxy.SOCKS5("tcp", fmt.Sprintf("127.0.0.1:%d", status.Port), &proxy.Auth{
+	host := "127.0.0.1"
+	if len(status.LANAddresses) > 0 {
+		host = status.LANAddresses[0]
+	}
+	dialer, err := proxy.SOCKS5("tcp", net.JoinHostPort(host, fmt.Sprint(status.Port)), &proxy.Auth{
 		User: status.Username, Password: status.Password,
 	}, proxy.Direct)
 	if err != nil {
@@ -107,16 +190,23 @@ func TestExternalProxyEnablePersistsPortAndAuthenticatesHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.setEnabled(true); err != nil {
+	if err := p.setEnabledFor(true, "owner", h); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = p.close() })
+	if err := p.setAllowLAN(true, "owner"); err != nil {
+		t.Fatal(err)
+	}
 	status := p.status(true)
 	if !status.Enabled || !status.Running || status.Port == 0 {
 		t.Fatalf("proxy not running: %#v", status)
 	}
 
-	proxyURL, err := url.Parse(fmt.Sprintf("http://%s:%s@127.0.0.1:%d", status.Username, status.Password, status.Port))
+	host := "127.0.0.1"
+	if len(status.LANAddresses) > 0 {
+		host = status.LANAddresses[0]
+	}
+	proxyURL, err := url.Parse(fmt.Sprintf("http://%s:%s@%s:%d", status.Username, status.Password, host, status.Port))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +233,7 @@ func TestExternalProxyEnablePersistsPortAndAuthenticatesHTTP(t *testing.T) {
 	}
 
 	unauthenticated := &http.Client{
-		Transport: &http.Transport{Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", status.Port)})},
+		Transport: &http.Transport{Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: net.JoinHostPort(host, fmt.Sprint(status.Port))})},
 		Timeout:   3 * time.Second,
 	}
 	unauthResponse, err := unauthenticated.Get(upstream.URL)

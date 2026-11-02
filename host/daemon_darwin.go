@@ -351,6 +351,16 @@ func serveDaemonClient(conn net.Conn, token string, runtime *daemonRuntime) {
 				return
 			}
 			_ = writeReply(writer, Reply{Cmd: "externalProxy", ExternalProxy: ptrExternalStatus(runtime.external.status(true))})
+		case "set-external-proxy-lan":
+			if request.AllowLAN == nil {
+				_ = writeReply(writer, Reply{Cmd: "error", Error: &ErrorReply{Cmd: request.Cmd, Message: "allowLAN is required"}})
+				return
+			}
+			err := runtime.external.setAllowLAN(*request.AllowLAN, profile.initID)
+			_ = writeReply(writer, Reply{Cmd: "externalProxy", ExternalProxy: ptrExternalStatus(runtime.external.status(false))})
+			if err != nil {
+				_ = writeReply(writer, Reply{Cmd: "error", Error: &ErrorReply{Cmd: request.Cmd, Message: err.Error()}})
+			}
 		case "init":
 			profile.initialize(request, writer)
 		default:
@@ -373,6 +383,7 @@ func procRunningReply(host *Host, port int, daemon bool) Reply {
 		Port: port, ProxyAuth: host.proxyAuth, PID: os.Getpid(), Version: version,
 		SupportsPingPeer: true, SupportsLogin: true, SupportsCustomControlURL: true,
 		SupportsDaemonControl: daemon, SupportsExternalProxy: daemon,
+		SupportsExternalProxyLAN: daemon,
 	}}
 }
 

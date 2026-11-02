@@ -19,6 +19,10 @@ an app sends to it is routed through the enabling browser profile's Tailchrome
 node or rejected, never silently sent directly. Other browser profiles keep
 their own independent nodes and browser proxy settings.
 
+For an iPhone on trusted Wi-Fi, optionally enable **Allow devices on the local
+network** and enter the revealed LAN address and credentials in its Wi-Fi HTTP
+proxy settings. Localhost remains the default. See [LAN setup and limitations](docs/design/specs/2026-1102-01-lan-app-proxy.md).
+
 <p align="center">
   <img align="top" width="45%" alt="Tailchrome dashboard showing connection status and devices" src="store-assets/artwork/ui/dashboard.png" />
   <img align="top" width="45%" alt="Tailchrome exit-node picker showing devices and Mullvad VPN locations" src="store-assets/artwork/ui/exit-nodes-readme.png" />

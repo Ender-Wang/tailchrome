@@ -34,6 +34,7 @@ export function baseState(overrides: Partial<TailscaleState> = {}): TailscaleSta
     supportsCustomControlURL: false,
     supportsDaemonControl: false,
     supportsExternalProxy: false,
+    supportsExternalProxyLAN: false,
     externalProxy: null,
     reconnecting: false,
     autoConnectOnStart: false,

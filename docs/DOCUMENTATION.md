@@ -107,6 +107,11 @@ Each browser profile has its own Tailscale identity. Different profiles can use 
 
 ## Feature Set
 
+The optional macOS app proxy now supports a separate LAN-access toggle.
+Localhost remains the default; see [LAN setup, protocol boundaries and test
+tracking](design/specs/2026-1102-01-lan-app-proxy.md). Browser listeners and
+split/bypass policy remain independent from this setting.
+
 ### Core Networking
 
 - Browse tailnet devices by IP or MagicDNS name from the browser.

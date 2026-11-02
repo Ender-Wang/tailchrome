@@ -91,11 +91,11 @@ export function showToast(message: string, levelOrOptions: "info" | "error" | To
 /**
  * Creates a copy button (small clipboard icon) that copies the given text.
  */
-export function createCopyButton(textToCopy: string): HTMLElement {
+export function createCopyButton(textToCopy: string, label?: string): HTMLElement {
   const btn = document.createElement("button");
   btn.className = "copy-btn";
-  btn.title = "Copy to clipboard";
-  btn.setAttribute("aria-label", "Copy to clipboard");
+  btn.title = label ? `Copy ${label}` : "Copy to clipboard";
+  btn.setAttribute("aria-label", btn.title);
 
   // Clipboard icon using SVG (via DOM API, no innerHTML)
   const ns = "http://www.w3.org/2000/svg";
@@ -131,7 +131,7 @@ export function createCopyButton(textToCopy: string): HTMLElement {
     e.stopPropagation();
     copyToClipboard(textToCopy);
     btn.classList.add("copied");
-    showToast("Copied " + textToCopy);
+    showToast("Copied " + (label ?? textToCopy));
     setTimeout(() => {
       btn.classList.remove("copied");
     }, 1500);

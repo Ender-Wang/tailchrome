@@ -43,7 +43,7 @@ Last updated: 2026-09-21
 | Feature                           | Native Client | Tailchrome | Notes                                                                                                                                                                                   |
 | --------------------------------- | ------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Access tailnet devices by IP      | Yes           | Yes        | Via SOCKS5/HTTP proxy on `127.0.0.1`                                                                                                                                                    |
-| Proxy local non-browser apps      | System-wide   | Partial    | macOS only: an opt-in authenticated HTTP(S)/SOCKS5 loopback listener uses the browser profile that enabled it. It does not alter system routes or apply browser split/bypass rules.                            |
+| Proxy local non-browser apps      | System-wide   | Partial    | macOS only: an opt-in authenticated HTTP(S)/SOCKS5 listener (localhost by default, with optional trusted-LAN access) uses the browser profile that enabled it. It does not alter system routes or apply browser split/bypass rules.                            |
 | MagicDNS (access by hostname)     | Yes           | Yes        | `corpDNS` toggle in popup; full MagicDNS names and exact known peer short names                                                                                                                        |
 | Exit nodes (use)                  | Yes           | Yes        | Full exit node picker with search, country flags, online/offline status                                                                                                                 |
 | Exit node suggestion              | Yes           | Yes        | The picker shows a client-side **Recommended** Mullvad row, preferring an online nearby location based on the browser time zone; it is never auto-applied. |
@@ -175,7 +175,7 @@ Last updated: 2026-09-21
 - **Quick settings** -- Shields Up, advertise exit node, MagicDNS toggle all in the popup
 - **Custom peer URLs** -- Tailchrome-exclusive feature for per-device quick access
 - **Context menu file sharing** -- Tailchrome-exclusive right-click URL sharing
-- **Zero system routing impact** -- browser traffic is profile-scoped; macOS apps can opt into an explicit loopback proxy, but Tailchrome never changes system routes
+- **Zero system routing impact** -- browser traffic is profile-scoped; macOS apps can opt into an explicit proxy (localhost by default, with optional trusted-LAN access), but Tailchrome never changes system routes
 
 ### What Tailchrome does NOT support
 
@@ -196,6 +196,6 @@ These gaps exist for fundamental reasons:
 
 1. **No inbound connections to the browser** -- browsers cannot accept incoming TCP connections, so Taildrop receive, Serve, and Funnel are not possible without a separate receiver process.
 2. **Native messaging payload limit** -- Chrome enforces a 1 MB message limit, so Taildrop sends are split into roughly 700 KB chunks and reassembled by the helper. The implementation caps assembled files at 50 MiB and still buffers the encoded file in extension/host memory.
-3. **Browser sandbox and explicit app scope** -- the extension cannot modify system DNS, routing tables, or network configuration. The helper resolves restricted DNS domains using the control plane's configuration; ordinary browsing keeps the browser/system resolver. On macOS, applications may opt into a separate loopback proxy, but Tailchrome still never captures unconfigured application traffic.
+3. **Browser sandbox and explicit app scope** -- the extension cannot modify system DNS, routing tables, or network configuration. The helper resolves restricted DNS domains using the control plane's configuration; ordinary browsing keeps the browser/system resolver. On macOS, applications may opt into a separate proxy (localhost by default, with optional trusted-LAN access), but Tailchrome still never captures unconfigured application traffic.
 4. **tsnet scope** -- the native host runs a `tsnet.Server`, which is a userspace Tailscale node. It does not have the full feature surface of `tailscaled` (the system daemon). Features like Serve, Funnel, and network lock require daemon-level integration that `tsnet` does not expose.
 5. **UI surface area** -- the popup is constrained to a small window. Some features (SSH server toggle and advanced daemon diagnostics) remain omitted even when lower layers expose related data.

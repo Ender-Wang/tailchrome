@@ -39,6 +39,7 @@ export type NativeRequest =
   | { cmd: "netcheck" }
   | { cmd: "get-external-proxy-status" }
   | { cmd: "set-external-proxy"; enabled: boolean }
+  | { cmd: "set-external-proxy-lan"; allowLAN: boolean }
   | { cmd: "reveal-external-proxy" }
   | { cmd: "rotate-external-proxy-credentials" };
 
@@ -46,6 +47,8 @@ export interface ExternalProxyStatus {
   enabled: boolean;
   running: boolean;
   host: string;
+  allowLAN?: boolean;
+  lanAddresses?: string[];
   port?: number;
   protocols: string[];
   authRequired: boolean;
@@ -71,6 +74,7 @@ export interface NativeReply {
     supportsCustomControlURL?: boolean;
     supportsDaemonControl?: boolean;
     supportsExternalProxy?: boolean;
+    supportsExternalProxyLAN?: boolean;
     proxyAuth?: { version: 1; username: string; password: string };
   };
   init?: { error?: string };
@@ -291,6 +295,7 @@ export interface TailscaleState {
   supportsCustomControlURL: boolean;
   supportsDaemonControl: boolean;
   supportsExternalProxy: boolean;
+  supportsExternalProxyLAN: boolean;
   externalProxy: ExternalProxyStatus | null;
   /** True when the native host disconnected and reconnection is being attempted. */
   reconnecting: boolean;
@@ -358,6 +363,7 @@ export type BackgroundMessage =
   | { type: "open-web-client" }
   | { type: "set-auto-connect-on-start"; value: boolean }
   | { type: "set-external-proxy"; enabled: boolean }
+  | { type: "set-external-proxy-lan"; allowLAN: boolean }
   | { type: "reveal-external-proxy" }
   | { type: "rotate-external-proxy-credentials" };
 

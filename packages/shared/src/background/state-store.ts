@@ -43,6 +43,7 @@ const DEFAULT_STATE: TailscaleState = {
   supportsCustomControlURL: false,
   supportsDaemonControl: false,
   supportsExternalProxy: false,
+  supportsExternalProxyLAN: false,
   externalProxy: null,
   reconnecting: false,
   autoConnectOnStart: false,

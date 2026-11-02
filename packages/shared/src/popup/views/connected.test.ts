@@ -304,6 +304,41 @@ describe("connected view", () => {
     });
   });
 
+  it("gates LAN access, sends its command and never uses a wildcard as a client URL", () => {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const proxy = {
+      enabled: true, running: true, host: "127.0.0.1", port: 12345,
+      protocols: ["http", "socks5"], authRequired: true,
+    };
+    renderConnected(root, baseState({ supportsExternalProxy: true, externalProxy: proxy }));
+    expect(root.querySelector("[data-external-proxy-lan]")).toBeNull();
+    renderConnected(root, baseState({ supportsExternalProxy: true, supportsExternalProxyLAN: true, externalProxy: proxy }));
+    const toggle = root.querySelector<HTMLInputElement>("[data-external-proxy-lan] input")!;
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change"));
+    expect(sendMessage).toHaveBeenCalledWith({ type: "set-external-proxy-lan", allowLAN: true });
+    const next = baseState({ supportsExternalProxy: true, supportsExternalProxyLAN: true,
+      externalProxy: { ...proxy, allowLAN: true, host: "0.0.0.0", lanAddresses: ["192.168.1.20"] } });
+    updateConnected(root, next);
+    setExternalProxyDetails({ ...next.externalProxy!, username: "tailchrome", password: "secret" });
+    const details = root.querySelector<HTMLElement>("[data-external-proxy-details]")!;
+    const address = details.querySelector<HTMLSelectElement>("select")!;
+    expect(Array.from(address.options, option => option.value)).toEqual(["127.0.0.1", "192.168.1.20"]);
+    address.value = "192.168.1.20";
+    address.dispatchEvent(new Event("change"));
+    expect(details.querySelector<HTMLInputElement>('[aria-label="Proxy server"]')!.value).toBe("192.168.1.20");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    details.querySelector<HTMLButtonElement>('[aria-label="Copy HTTP URL"]')!.click();
+    expect(writeText).toHaveBeenLastCalledWith("http://tailchrome:secret@192.168.1.20:12345");
+    details.querySelector<HTMLButtonElement>('[aria-label="Copy SOCKS5 URL"]')!.click();
+    expect(writeText).toHaveBeenLastCalledWith("socks5://tailchrome:secret@192.168.1.20:12345");
+    expect(details.textContent).not.toContain("secret");
+    expect(document.querySelector(".toast")!.textContent).toBe("Copied SOCKS5 URL");
+    root.remove();
+  });
+
   it("capability-gates the macOS local app proxy and sends toggle commands", () => {
     const unsupported = document.createElement("div");
     renderConnected(unsupported, baseState({ supportsExternalProxy: false }));
@@ -363,12 +398,14 @@ describe("connected view", () => {
       password: "secret",
     });
     const details = root.querySelector<HTMLElement>("[data-external-proxy-details]")!;
-    expect(details.textContent).toContain("Password: secret");
-    expect(details.textContent).toContain(
-      "http://tailchrome:secret@127.0.0.1:12345",
-    );
-    expect(details.textContent).toContain(
-      "socks5://tailchrome:secret@127.0.0.1:12345",
-    );
+    const password = details.querySelector<HTMLInputElement>('[aria-label="Proxy password"]')!;
+    expect(password.type).toBe("password");
+    expect(password.value).toBe("secret");
+    expect(details.textContent).not.toContain("secret");
+    details.querySelector<HTMLButtonElement>('[aria-label="Show proxy password"]')!.click();
+    expect(password.type).toBe("text");
+    details.querySelector<HTMLButtonElement>('[aria-label="Hide proxy password"]')!.click();
+    expect(password.type).toBe("password");
+    expect(details.querySelector<HTMLInputElement>('[aria-label="Proxy server"]')!.value).toBe("127.0.0.1");
   });
 });

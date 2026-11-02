@@ -38,6 +38,7 @@ let coordinationServerEditorOpen = false;
 let advancedSectionOpen = false;
 
 let revealedExternalProxy: ExternalProxyStatus | null = null;
+let externalProxyHost = "127.0.0.1";
 
 export function setExternalProxyDetails(details: ExternalProxyStatus): void {
   revealedExternalProxy = details;
@@ -329,6 +330,8 @@ export function renderConnected(root: HTMLElement, state: TailscaleState): void 
   externalProxyRow.dataset.externalProxyRow = "true";
   externalProxyRow.dataset.supported = String(state.supportsExternalProxy);
   externalProxyRow.dataset.enabled = String(state.externalProxy?.enabled ?? false);
+  externalProxyRow.dataset.allowLan = String(state.externalProxy?.allowLAN ?? false);
+  externalProxyRow.dataset.lanSupported = String(state.supportsExternalProxyLAN);
   const externalProxyLabel = document.createElement("span");
   externalProxyLabel.className = "setting-label";
   externalProxyLabel.textContent = "Local app proxy";
@@ -349,6 +352,24 @@ export function renderConnected(root: HTMLElement, state: TailscaleState): void 
   advancedPanel.appendChild(externalProxyRow);
 
   if (state.supportsExternalProxy && state.externalProxy?.enabled) {
+    if (state.supportsExternalProxyLAN) {
+      const lanRow = document.createElement("div");
+      lanRow.className = "setting-row";
+      lanRow.dataset.externalProxyLan = "true";
+      const label = document.createElement("span");
+      label.className = "setting-label";
+      label.textContent = "Allow devices on the local network";
+      lanRow.append(label, createToggle(state.externalProxy.allowLAN ?? false, (allowLAN) => {
+        revealedExternalProxy = null;
+        view.querySelector<HTMLElement>("[data-external-proxy-details]")?.replaceChildren();
+        sendMessage({ type: "set-external-proxy-lan", allowLAN });
+      }, "Allow devices on the local network"));
+      advancedPanel.appendChild(lanRow);
+      const help = document.createElement("div");
+      help.className = "setting-help";
+      help.textContent = "Trusted networks only. Proxy credentials are not encrypted. Changing access disconnects app sessions.";
+      advancedPanel.appendChild(help);
+    }
     const externalActions = document.createElement("div");
     externalActions.className = "setting-row";
     const reveal = document.createElement("button");
@@ -596,23 +617,98 @@ function renderExternalProxyDetails(container: HTMLElement, details: ExternalPro
     return;
   }
   const credentials = `${encodeURIComponent(details.username)}:${encodeURIComponent(details.password)}`;
-  const values = [
-    ["Host", details.host],
-    ["Port", String(details.port)],
-    ["Username", details.username],
-    ["Password", details.password],
-    ["HTTP(S)", `http://${credentials}@${details.host}:${details.port}`],
-    ["SOCKS5", `socks5://${credentials}@${details.host}:${details.port}`],
-  ] as const;
-  for (const [label, value] of values) {
-    const row = document.createElement("div");
-    row.className = "status-bar-row";
-    const text = document.createElement("span");
-    text.className = "status-bar-ip";
-    text.textContent = `${label}: ${value}`;
-    row.append(text, createCopyButton(value));
-    container.appendChild(row);
+  const hosts = ["127.0.0.1", ...(details.allowLAN ? details.lanAddresses ?? [] : [])];
+  if (!hosts.includes(externalProxyHost)) externalProxyHost = "127.0.0.1";
+  const card = document.createElement("div");
+  card.className = "proxy-connection-card";
+  const heading = document.createElement("div");
+  heading.className = "proxy-connection-heading";
+  heading.textContent = "Connection details";
+  card.appendChild(heading);
+  if (details.allowLAN) {
+    const label = document.createElement("label");
+    label.className = "proxy-address-picker";
+    label.append("Connect via");
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", "Proxy connection address");
+    for (const host of hosts) {
+      const option = document.createElement("option");
+      option.value = host;
+      option.textContent = host === "127.0.0.1" ? "This Mac · 127.0.0.1" : `LAN · ${host}`;
+      select.appendChild(option);
+    }
+    select.value = externalProxyHost;
+    select.addEventListener("change", () => {
+      externalProxyHost = select.value;
+      renderFields();
+    });
+    label.appendChild(select);
+    card.appendChild(label);
+    const help = document.createElement("div");
+    help.className = "proxy-connection-hint";
+    help.textContent = hosts.length > 1
+      ? "For your iPhone, select this Mac’s Wi-Fi address. VPN and VM addresses may also appear."
+      : "No LAN address found. Connect to Wi-Fi and refresh the connection details.";
+    card.appendChild(help);
   }
+  const fields = document.createElement("div");
+  card.appendChild(fields);
+  function renderFields(): void {
+    fields.replaceChildren();
+    for (const [label, value] of [
+      ["Server", externalProxyHost], ["Port", String(details.port)],
+      ["Username", details.username!], ["Password", details.password!],
+    ] as const) {
+      const row = document.createElement("div");
+      row.className = "proxy-detail-row";
+      const name = document.createElement("span");
+      name.className = "proxy-detail-label";
+      name.textContent = label;
+      const input = document.createElement("input");
+      input.readOnly = true;
+      input.type = label === "Password" ? "password" : "text";
+      input.value = value;
+      input.setAttribute("aria-label", `Proxy ${label.toLowerCase()}`);
+      row.append(name, input);
+      if (label === "Password") {
+        const reveal = document.createElement("button");
+        reveal.type = "button";
+        reveal.className = "proxy-password-toggle";
+        reveal.textContent = "Show";
+        reveal.setAttribute("aria-label", "Show proxy password");
+        reveal.setAttribute("aria-pressed", "false");
+        reveal.addEventListener("click", () => {
+          const hidden = input.type === "password";
+          input.type = hidden ? "text" : "password";
+          reveal.textContent = hidden ? "Hide" : "Show";
+          reveal.setAttribute("aria-label", hidden ? "Hide proxy password" : "Show proxy password");
+          reveal.setAttribute("aria-pressed", String(hidden));
+        });
+        row.appendChild(reveal);
+      }
+      row.appendChild(createCopyButton(value, label.toLowerCase()));
+      fields.appendChild(row);
+    }
+    const actions = document.createElement("div");
+    actions.className = "proxy-url-actions";
+    for (const [protocol, label] of [["http", "HTTP"], ["socks5", "SOCKS5"]] as const) {
+      const copy = createCopyButton(`${protocol}://${credentials}@${externalProxyHost}:${details.port}`, `${label} URL`);
+      copy.classList.add("btn", "btn-secondary");
+      copy.append(`Copy ${label} URL`);
+      actions.appendChild(copy);
+    }
+    fields.appendChild(actions);
+  }
+  renderFields();
+  const instructions = document.createElement("details");
+  instructions.className = "proxy-setup-help";
+  const summary = document.createElement("summary");
+  summary.textContent = "Set up on iPhone";
+  const steps = document.createElement("p");
+  steps.textContent = "Settings → Wi-Fi → your network → HTTP Proxy → Manual. Enter the selected LAN server and port, enable Authentication, then enter the username and password. Keep this Mac awake.";
+  instructions.append(summary, steps);
+  if (details.allowLAN) card.appendChild(instructions);
+  container.appendChild(card);
 }
 
 // Track health key to detect changes during in-place updates
@@ -868,8 +964,11 @@ export function updateConnected(root: HTMLElement, state: TailscaleState): void 
   const externalProxyChanged =
     !externalProxyRow ||
     externalProxyRow.dataset.supported !== String(state.supportsExternalProxy) ||
-    externalProxyRow.dataset.enabled !== String(state.externalProxy?.enabled ?? false);
+    externalProxyRow.dataset.enabled !== String(state.externalProxy?.enabled ?? false) ||
+    externalProxyRow.dataset.allowLan !== String(state.externalProxy?.allowLAN ?? false) ||
+    externalProxyRow.dataset.lanSupported !== String(state.supportsExternalProxyLAN);
   if (externalProxyChanged) {
+    revealedExternalProxy = null;
     renderConnected(root, state);
     return;
   }

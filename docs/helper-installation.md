@@ -182,13 +182,25 @@ bound to that profile. Runtime and control files live under:
 ```
 
 The extension's **Advanced → Local app proxy** switch controls a separate
-loopback listener for applications such as Nextcloud. It supports HTTP proxying
+listener for applications such as Nextcloud, bound to localhost by default. It supports HTTP proxying
 (including HTTPS via CONNECT) and SOCKS5 on the same stable port. Authentication
 is always required: the username is `tailchrome`, while a random password is
 generated for this installation and stored only in the protected helper
 configuration. Use **Reveal connection details** to copy the individual fields
 or proxy URLs; use **Rotate password** to revoke existing sessions and generate
 a replacement.
+
+To use an iPhone or another trusted-network device, turn on **Allow devices on
+the local network** and reveal connection details again. Enter a listed LAN
+IPv4 address, port, username and password separately in the iPhone Wi-Fi
+**HTTP Proxy → Manual** settings. The Mac must remain awake. This binds all IPv4
+interfaces, subject to the firewall; it is not limited to the current Wi-Fi.
+Proxy authentication is unencrypted, so enable this only on trusted networks.
+Turning LAN access off closes remote sessions and restores localhost on the
+same port. Disabling the app proxy clears the LAN opt-in.
+
+See the [LAN feature tracker](design/specs/2026-1102-01-lan-app-proxy.md) for
+scope, limitations and phone verification steps.
 
 The listener uses the independent Tailchrome node belonging to the browser
 profile that enables it. It keeps that ownership across helper restarts. To use

@@ -1,5 +1,8 @@
 # macOS helper installation
 
+The app proxy defaults to localhost. For an iPhone on trusted Wi-Fi, the
+extension can separately enable LAN access; see [setup and test tracking](../../docs/design/specs/2026-1102-01-lan-app-proxy.md).
+
 ## Install for this user — no administrator access required
 
 Download `tailchrome-helper-macos-user.zip` from the matching release, unzip it,

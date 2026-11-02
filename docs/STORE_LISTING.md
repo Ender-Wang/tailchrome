@@ -26,7 +26,7 @@ Tailchrome connects your browser to your Tailscale tailnet without installing a 
 - Optional authenticated HTTP(S)/SOCKS5 proxy for local apps on macOS
 
 **How it works:**
-Tailchrome uses a lightweight native helper app that runs a full Tailscale node for each browser profile. Your system networking stays untouched. Browser routing is profile-scoped; on macOS, local apps can also opt into a separate authenticated loopback proxy.
+Tailchrome uses a lightweight native helper app that runs a full Tailscale node for each browser profile. Your system networking stays untouched. Browser routing is profile-scoped; on macOS, local apps can also opt into a separate authenticated proxy (localhost by default, with optional trusted-LAN access).
 
 **Getting started:**
 1. Install the extension
@@ -71,7 +71,7 @@ Tailchrome connects Firefox to your Tailscale tailnet without a system VPN. Each
 Install the extension, download the helper installer, and log in. The helper app is a small native program that runs a Tailscale node per browser profile. Setup takes about 30 seconds.
 
 **How it works:**
-A native messaging host runs locally and manages Tailscale connections per profile. Firefox routing remains profile-scoped. On macOS, local apps can separately opt into an authenticated loopback proxy; system networking is never modified.
+A native messaging host runs locally and manages Tailscale connections per profile. Firefox routing remains profile-scoped. On macOS, local apps can separately opt into an authenticated proxy (localhost by default, with optional trusted-LAN access); system networking is never modified.
 
 **Open Source:**
 Source code is available at https://github.com/dantraynor/tailchrome

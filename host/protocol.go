@@ -33,7 +33,8 @@ type Request struct {
 
 	// External proxy control. These commands are handled only by the resident
 	// daemon and never alter browser domain-split or bypass settings.
-	Enabled *bool `json:"enabled,omitempty"`
+	Enabled  *bool `json:"enabled,omitempty"`
+	AllowLAN *bool `json:"allowLAN,omitempty"`
 }
 
 // Reply represents a message from the host to the browser extension.
@@ -71,6 +72,7 @@ type ProcRunningReply struct {
 	SupportsCustomControlURL bool       `json:"supportsCustomControlURL,omitempty"`
 	SupportsDaemonControl    bool       `json:"supportsDaemonControl,omitempty"`
 	SupportsExternalProxy    bool       `json:"supportsExternalProxy,omitempty"`
+	SupportsExternalProxyLAN bool       `json:"supportsExternalProxyLAN,omitempty"`
 }
 
 // InitReply is the response to an "init" command.

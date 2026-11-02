@@ -490,6 +490,7 @@ function isProcRunning(value: unknown): boolean {
     optionalField(value, "supportsCustomControlURL", isBoolean)
     && optionalField(value, "supportsDaemonControl", isBoolean)
     && optionalField(value, "supportsExternalProxy", isBoolean)
+    && optionalField(value, "supportsExternalProxyLAN", isBoolean)
   );
 }
 
@@ -499,6 +500,8 @@ function isExternalProxy(value: unknown): boolean {
     isBoolean(value["enabled"]) &&
     isBoolean(value["running"]) &&
     isString(value["host"]) &&
+    optionalField(value, "allowLAN", isBoolean) &&
+    optionalField(value, "lanAddresses", isStringArray) &&
     optionalField(value, "port", isFiniteNumber) &&
     isStringArray(value["protocols"]) &&
     isBoolean(value["authRequired"]) &&

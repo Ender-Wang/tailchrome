@@ -362,9 +362,12 @@ describe("initBackground", () => {
           pid: 1234,
           supportsDaemonControl: true,
           supportsExternalProxy: true,
+          supportsExternalProxyLAN: true,
         },
       });
       expect(nativePort.postMessage).toHaveBeenCalledWith({ cmd: "get-external-proxy-status" });
+      firstPopup.onMessage._listeners[0]!({ type: "set-external-proxy-lan", allowLAN: true });
+      expect(nativePort.postMessage).toHaveBeenCalledWith({ cmd: "set-external-proxy-lan", allowLAN: true });
 
       firstPopup.postMessage.mockClear();
       secondPopup.postMessage.mockClear();

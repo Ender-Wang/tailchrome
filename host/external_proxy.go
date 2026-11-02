@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 )
 
@@ -15,6 +16,7 @@ const externalProxyUsername = "tailchrome"
 
 type externalProxyConfig struct {
 	Enabled     bool   `json:"enabled"`
+	AllowLAN    bool   `json:"allowLAN,omitempty"`
 	Port        int    `json:"port,omitempty"`
 	Username    string `json:"username"`
 	Password    string `json:"password"`
@@ -25,6 +27,8 @@ type ExternalProxyStatus struct {
 	Enabled      bool     `json:"enabled"`
 	Running      bool     `json:"running"`
 	Host         string   `json:"host"`
+	AllowLAN     bool     `json:"allowLAN"`
+	LANAddresses []string `json:"lanAddresses"`
 	Port         int      `json:"port,omitempty"`
 	Protocols    []string `json:"protocols"`
 	AuthRequired bool     `json:"authRequired"`
@@ -119,6 +123,7 @@ func (p *externalProxy) setEnabledFor(enabled bool, ownerInitID string, host *Ho
 		}
 	} else {
 		p.config.Enabled = false
+		p.config.AllowLAN = false
 		p.config.OwnerInitID = ""
 		p.host = nil
 		p.lastError = ""
@@ -146,6 +151,7 @@ func (p *externalProxy) setEnabled(enabled bool) error {
 		}
 	} else {
 		p.config.Enabled = false
+		p.config.AllowLAN = false
 		p.config.OwnerInitID = ""
 		p.lastError = ""
 		if p.listener != nil {
@@ -154,6 +160,61 @@ func (p *externalProxy) setEnabled(enabled bool) error {
 		}
 	}
 	return p.saveLocked()
+}
+
+// setAllowLAN changes only the app listener. Persist before rebinding so a
+// failed save cannot accidentally expose the proxy beyond localhost.
+func (p *externalProxy) setAllowLAN(allow bool, ownerInitID string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.config.Enabled || p.config.OwnerInitID != ownerInitID {
+		return errors.New("enable the local app proxy from this browser profile first")
+	}
+	if p.config.AllowLAN == allow && p.listener != nil {
+		return nil
+	}
+	previous := p.config.AllowLAN
+	p.config.AllowLAN = allow
+	if err := p.saveLocked(); err != nil {
+		p.config.AllowLAN = previous
+		return err
+	}
+	if p.listener != nil {
+		_ = p.listener.Close()
+		p.listener = nil
+	}
+	if err := p.startLocked(); err != nil {
+		p.lastError = err.Error()
+		return err
+	}
+	return nil
+}
+
+func (p *externalProxy) bindHostLocked() string {
+	if p.config.AllowLAN {
+		return "0.0.0.0"
+	}
+	return "127.0.0.1"
+}
+
+// Private IPv4 addresses are connection suggestions, not an access allowlist.
+func localProxyLANAddresses() []string {
+	result := []string{}
+	interfaces, _ := net.Interfaces()
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addresses, _ := iface.Addrs()
+		for _, address := range addresses {
+			ip, _, err := net.ParseCIDR(address.String())
+			if err == nil && ip.To4() != nil && ip.IsPrivate() {
+				result = append(result, ip.String())
+			}
+		}
+	}
+	sort.Strings(result)
+	return result
 }
 
 func (p *externalProxy) rotateCredentials() error {
@@ -180,12 +241,17 @@ func (p *externalProxy) status(revealPassword bool) ExternalProxyStatus {
 	status := ExternalProxyStatus{
 		Enabled:      p.config.Enabled,
 		Running:      p.listener != nil,
-		Host:         "127.0.0.1",
+		Host:         p.bindHostLocked(),
+		AllowLAN:     p.config.AllowLAN,
+		LANAddresses: []string{},
 		Port:         p.config.Port,
 		Protocols:    []string{"http", "socks5"},
 		AuthRequired: true,
 		Username:     p.config.Username,
 		Error:        p.lastError,
+	}
+	if p.config.AllowLAN {
+		status.LANAddresses = localProxyLANAddresses()
 	}
 	if revealPassword {
 		status.Password = p.config.Password
@@ -208,11 +274,8 @@ func (p *externalProxy) startLocked() error {
 	if p.host == nil {
 		return errors.New("external proxy has no Tailscale profile")
 	}
-	address := "127.0.0.1:0"
-	if p.config.Port != 0 {
-		address = fmt.Sprintf("127.0.0.1:%d", p.config.Port)
-	}
-	base, err := net.Listen("tcp", address)
+	address := net.JoinHostPort(p.bindHostLocked(), fmt.Sprint(p.config.Port))
+	base, err := net.Listen("tcp4", address)
 	if err != nil {
 		return fmt.Errorf("listen on external proxy %s: %w", address, err)
 	}
