@@ -86,6 +86,12 @@ It also cannot guarantee a direct path through a network that blocks UDP.
 
 ## Phase 2: PAC routing and iOS authentication
 
+The user authorized a separate PAC implementation for physical-device testing.
+See the [PAC implementation tracker](2026-1104-01-selective-app-proxy-pac.md).
+Its authenticated iPhone setup remains unverified until the device test;
+the boundaries below remain acceptance requirements rather than a claim that
+all clients support proxy-authentication prompts.
+
 The desired iPhone setting is Wi-Fi → HTTP Proxy → Automatic → URL.
 PAC should send tailnet destinations to the Mac's app proxy and ordinary
 websites DIRECT. Protected matches must return only the proxy, without a DIRECT
@@ -98,7 +104,7 @@ setup. Do not embed credentials in the PAC body or assume credentials in the
 PAC download URL authenticate later CONNECT requests. Do not silently disable
 authentication to make Automatic mode work.
 
-Before implementing the PAC setup flow:
+PAC acceptance checks:
 
 - Verify whether iOS/Safari presents and retains the proxy's HTTP 407 challenge
   after choosing Automatic, and document that other apps may behave differently.

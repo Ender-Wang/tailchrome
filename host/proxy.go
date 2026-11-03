@@ -57,6 +57,10 @@ func (h *Host) startProxy() (int, error) {
 // separate credentials and lifecycles; only the browser listener exposes the
 // helper's local web client.
 func (h *Host) serveAuthenticatedProxy(ln net.Listener, auth *ProxyAuth, allowLocalWebClient bool) {
+	h.serveAuthenticatedProxyWithHTTPHandler(ln, auth, allowLocalWebClient, h.httpProxyHandlerWithAuth(auth, allowLocalWebClient))
+}
+
+func (h *Host) serveAuthenticatedProxyWithHTTPHandler(ln net.Listener, auth *ProxyAuth, allowLocalWebClient bool, handler http.Handler) {
 	socksLn, httpLn := proxymux.SplitSOCKSAndHTTP(ln)
 	socksServer := &socks5.Server{
 		Logf:     func(string, ...any) {},
@@ -75,7 +79,8 @@ func (h *Host) serveAuthenticatedProxy(ln net.Listener, auth *ProxyAuth, allowLo
 		}
 	}()
 	go func() {
-		if err := h.serveHTTPProxyWithAuth(httpLn, auth, allowLocalWebClient); err != nil && !errors.Is(err, net.ErrClosed) && err != http.ErrServerClosed {
+		server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+		if err := server.Serve(httpLn); err != nil && !errors.Is(err, net.ErrClosed) && err != http.ErrServerClosed {
 			log.Printf("HTTP proxy server error: %v", err)
 		}
 	}()

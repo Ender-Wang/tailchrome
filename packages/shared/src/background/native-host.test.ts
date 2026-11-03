@@ -756,6 +756,7 @@ describe("isValidNativeReply", () => {
         protocols: ["http", "socks5"],
         authRequired: true,
         username: "tailchrome",
+        pacPath: "/proxy.pac",
       },
     })).toBe(true);
     // Unknown fields from newer helpers are tolerated, not rejected.
@@ -849,6 +850,7 @@ describe("isValidNativeReply", () => {
     },
     { procRunning: { port: "1055", pid: 1 } },
     { externalProxy: { enabled: true, running: true, host: "127.0.0.1" } },
+    { externalProxy: { enabled: true, running: true, host: "127.0.0.1", protocols: ["http"], authRequired: true, pacPath: "//untrusted.example/pac" } },
     { init: { error: 42 } },
     { pong: "bad" },
     { profiles: { current: null, profiles: [] } },

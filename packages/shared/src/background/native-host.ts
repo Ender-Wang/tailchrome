@@ -502,6 +502,7 @@ function isExternalProxy(value: unknown): boolean {
     isString(value["host"]) &&
     optionalField(value, "allowLAN", isBoolean) &&
     optionalField(value, "lanAddresses", isStringArray) &&
+    optionalField(value, "pacPath", (path) => path === "/proxy.pac") &&
     optionalField(value, "port", isFiniteNumber) &&
     isStringArray(value["protocols"]) &&
     isBoolean(value["authRequired"]) &&

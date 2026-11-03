@@ -319,7 +319,7 @@ describe("connected view", () => {
     toggle.dispatchEvent(new Event("change"));
     expect(sendMessage).toHaveBeenCalledWith({ type: "set-external-proxy-lan", allowLAN: true });
     const next = baseState({ supportsExternalProxy: true, supportsExternalProxyLAN: true,
-      externalProxy: { ...proxy, allowLAN: true, host: "0.0.0.0", lanAddresses: ["192.168.1.20"] } });
+      externalProxy: { ...proxy, allowLAN: true, host: "0.0.0.0", lanAddresses: ["192.168.1.20"], pacPath: "/proxy.pac" } });
     updateConnected(root, next);
     setExternalProxyDetails({ ...next.externalProxy!, username: "tailchrome", password: "secret" });
     const details = root.querySelector<HTMLElement>("[data-external-proxy-details]")!;
@@ -334,8 +334,13 @@ describe("connected view", () => {
     expect(writeText).toHaveBeenLastCalledWith("http://tailchrome:secret@192.168.1.20:12345");
     details.querySelector<HTMLButtonElement>('[aria-label="Copy SOCKS5 URL"]')!.click();
     expect(writeText).toHaveBeenLastCalledWith("socks5://tailchrome:secret@192.168.1.20:12345");
+    expect(details.querySelector<HTMLInputElement>('[aria-label="Automatic proxy URL"]')!.value).toBe("http://192.168.1.20:12345/proxy.pac");
+    details.querySelector<HTMLButtonElement>('[aria-label="Copy PAC URL"]')!.click();
+    expect(writeText).toHaveBeenLastCalledWith("http://192.168.1.20:12345/proxy.pac");
+    expect(details.textContent).toContain("Proxy authentication is still required");
+    expect(details.textContent).toContain("If authentication does not work, use Manual");
     expect(details.textContent).not.toContain("secret");
-    expect(document.querySelector(".toast")!.textContent).toBe("Copied SOCKS5 URL");
+    expect(document.querySelector(".toast")!.textContent).toBe("Copied PAC URL");
     root.remove();
   });
 

@@ -1,6 +1,6 @@
 # Tailchrome Privacy Policy
 
-Last updated: 2026-09-25
+Last updated: 2026-11-04
 
 ## Summary
 
@@ -52,6 +52,16 @@ Tailchrome sends this data only to:
 
 For information about how Tailscale handles data, see the
 [Tailscale Privacy Policy](https://tailscale.com/privacy-policy).
+
+## Local PAC Configuration
+
+The optional macOS app proxy serves a PAC configuration file to clients that
+can reach its listener. The download does not require authentication and
+contains tailnet routing metadata, including node/DNS names and subnet prefixes,
+but no usernames or passwords. It is localhost-only by default and becomes
+reachable from other devices when LAN sharing is enabled. Proxy forwarding
+still requires credentials. The helper does not send the PAC file to a hosted
+service; clients fetch it directly from the Mac.
 
 ## Data Tailchrome Does Not Collect
 

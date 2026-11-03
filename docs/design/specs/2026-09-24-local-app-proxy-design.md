@@ -111,6 +111,10 @@ The [transport recovery upgrade](2026-1103-01-transport-recovery-and-pac.md)
 updates the embedded Tailscale dependency and its route/DNS data APIs while
 preserving these proxy boundaries.
 
+The optional [automatic client configuration](2026-1104-01-selective-app-proxy-pac.md)
+adds a local PAC download. Selectivity happens in the client: requests actually
+submitted to the app proxy retain the same authentication and route checks.
+
 ### Chromium authentication probe
 
 Chromium cannot expose another extension's proxy authentication challenge to

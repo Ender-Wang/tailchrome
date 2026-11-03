@@ -44,6 +44,8 @@ export type NativeRequest =
   | { cmd: "rotate-external-proxy-credentials" };
 
 export interface ExternalProxyStatus {
+  /** Local PAC download path; absent on helpers without PAC support. */
+  pacPath?: "/proxy.pac";
   enabled: boolean;
   running: boolean;
   host: string;

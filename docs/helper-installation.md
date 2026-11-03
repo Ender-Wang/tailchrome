@@ -223,6 +223,33 @@ embedded transport retries transient UDP reachability errors instead of
 permanently losing its receive worker. Switching Wi-Fi can still interrupt
 existing TCP streams; applications must reconnect after the network returns.
 
+### Automatic proxy configuration (PAC)
+
+Reveal the app proxy's connection details, select the Mac's Wi-Fi address, and
+use **Copy PAC URL**. On iPhone, paste it into **Wi-Fi → your network → HTTP
+Proxy → Automatic → URL** and save. The helper serves the URL itself, so the
+browser can be closed. Keep the Mac awake and enable LAN sharing for the phone.
+
+Tailscale IPv4/IPv6 addresses, MagicDNS names, restricted DNS domains and accepted
+approved subnets use the proxy. Ordinary destinations go directly through the
+phone's network, even if the helper has an exit node selected. Protected matches
+have no DIRECT fallback. The app proxy's forwarding policy and the browser's
+filter/bypass settings remain unchanged.
+
+Automatic mode has no credential fields. PAC cannot supply credentials; HTTP
+forwarding still requires the existing username/password through a proxy-auth
+challenge. Safari may prompt; this flow needs physical-device verification.
+If the client does not authenticate, use **Manual → Authentication** instead.
+The PAC URL contains no password and downloading the script does not sign in.
+
+The download is unauthenticated and exposes routing names/prefixes to clients
+that can reach the enabled listener. It follows the same localhost/LAN scope.
+After route or DNS changes, reload Automatic configuration; after changing
+networks, update the URL if the Mac's address changed. If PAC cannot be fetched
+or executed, fallback behavior belongs to iOS and cannot be guaranteed by the
+script. See the [PAC tracker](design/specs/2026-1104-01-selective-app-proxy-pac.md)
+for testing boundaries and limitations.
+
 ## Removal
 
 `tailchrome uninstall` removes registrations owned by that executable and keeps

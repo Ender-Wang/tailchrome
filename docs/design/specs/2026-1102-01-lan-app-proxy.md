@@ -9,6 +9,10 @@ Extends [the resident helper and local-app proxy design](2026-09-24-local-app-pr
 Network-transition recovery and the separately deferred PAC setup are tracked
 in [transport recovery and selective proxy routing](2026-1103-01-transport-recovery-and-pac.md).
 
+Selective Automatic-mode setup is implemented separately in the
+[PAC tracker](2026-1104-01-selective-app-proxy-pac.md); Manual mode remains
+available while iPhone Automatic-mode authentication is being verified.
+
 ## Goal
 
 An iPhone on the same trusted network can access tailnet HTTP/HTTPS services

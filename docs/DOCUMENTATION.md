@@ -391,6 +391,7 @@ The native host is a Go binary at `host/` using `tailscale.com/tsnet` pinned to 
 | `daemon_darwin.go` / `daemon_other.go` | Per-user macOS daemon, authenticated bridge socket, per-profile runtime registry, persisted run intent, and non-macOS stubs |
 | `service_darwin.go` / `service_other.go` | LaunchAgent installation/removal and non-macOS stubs |
 | `external_proxy.go` | Stable authenticated app listener, protected configuration, credential rotation, and active-session revocation |
+| `proxy_pac.go` | App-listener PAC download and selective tailnet routing, independent of browser filter/bypass settings |
 | `status.go` | Retrying IPN bus watcher, debounced refresh, cached notification state, and `StatusUpdate` construction |
 | `proxy.go` / `proxy_policy.go` | SOCKS5/HTTP multiplexing, authenticated destination policy, lazy quad-100 web client, and buffered CONNECT tunneling |
 | `dns.go` / `exit_dns.go` | Restricted split-DNS forwarding and exit-node DNS behavior |
@@ -578,7 +579,7 @@ interface TailscaleState {
   `set-auto-connect-on-start`
 - Profiles and diagnostics: `switch-profile`, `new-profile`,
   `delete-profile`, `ping-peer`, and `netcheck`
-- macOS local apps: `set-external-proxy`, `reveal-external-proxy`, and
+- macOS local apps: `set-external-proxy`, `set-external-proxy-lan`, `reveal-external-proxy`, and
   `rotate-external-proxy-credentials`
 - Files and navigation: `send-file`, `suggest-exit-node`, `open-admin`, and
   `open-web-client`
@@ -885,6 +886,7 @@ tailchrome/
 |   +-- status.go                     # IPN bus watcher
 |   +-- proxy.go                      # SOCKS5/HTTP proxy
 |   +-- proxy_policy.go               # Authenticated destination policy
+|   +-- proxy_pac.go                  # App-listener PAC download and routing
 |   +-- dns.go / exit_dns.go          # Split and exit-node DNS forwarding
 |   +-- profiles.go                   # Profile management
 |   +-- taildrop.go                   # File transfer
@@ -1320,7 +1322,8 @@ a signing failure. See
   On macOS, local applications can separately opt in by configuring the
   explicit app-proxy endpoint. System routes and unconfigured apps are never
   modified or captured
-- The proxy binds to `127.0.0.1` only (not exposed to the network)
+- Browser listeners bind to `127.0.0.1`. The app listener also defaults to
+  localhost, with optional IPv4 LAN sharing on `0.0.0.0`
 - Suspending Chrome's MV3 worker does not clear Tailchrome's mandatory PAC.
   Chrome removes its proxy setting only when Tailchrome's effective policy
   becomes `direct`, immediately for an explicit routing release or after a
@@ -1329,9 +1332,16 @@ a signing failure. See
 - If an already protected route loses the helper, its authentication session,
   or its selected exit node, protected requests remain fail-closed (while
   split-tunnel exceptions remain direct) instead of falling through
-- HTTP and SOCKS5 proxy connections always require credentials. Browser
+- HTTP and SOCKS5 forwarding always require credentials. Browser
   credentials are ephemeral per profile runtime; app credentials are stable
   per installation until rotation and are revealed only on request
+- The app listener additionally serves an unauthenticated origin-form
+  `/proxy.pac` download containing routing metadata, never credentials. Its
+  script sends protected tailnet destinations only to the proxy and ordinary
+  destinations DIRECT. This is separate from the browser extension's PAC and
+  filter/bypass policy. The receiving socket determines the proxy address;
+  supplied Host headers cannot redirect the script to another endpoint.
+  See [PAC setup and authentication limitations](helper-installation.md#automatic-proxy-configuration-pac).
 
 ### Web Client Authorization
 

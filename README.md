@@ -23,6 +23,11 @@ For an iPhone on trusted Wi-Fi, optionally enable **Allow devices on the local
 network** and enter the revealed LAN address and credentials in its Wi-Fi HTTP
 proxy settings. Localhost remains the default. See [LAN setup and limitations](docs/design/specs/2026-1102-01-lan-app-proxy.md).
 
+The connection details also offer a **PAC URL** for selective automatic proxy
+configuration: tailnet destinations use the Mac, ordinary websites go direct.
+Proxy authentication is still required; iPhone Automatic-mode authentication
+needs device verification. See [automatic setup](docs/helper-installation.md#automatic-proxy-configuration-pac).
+
 <p align="center">
   <img align="top" width="45%" alt="Tailchrome dashboard showing connection status and devices" src="store-assets/artwork/ui/dashboard.png" />
   <img align="top" width="45%" alt="Tailchrome exit-node picker showing devices and Mullvad VPN locations" src="store-assets/artwork/ui/exit-nodes-readme.png" />

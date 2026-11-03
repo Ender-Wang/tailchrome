@@ -69,6 +69,21 @@ credentials are unencrypted on the client-to-Mac hop. Use LAN mode only on
 trusted networks. Scope changes revoke active sessions. Neither scope exposes
 the browser's local web client or authentication probe.
 
+The app listener also serves an unauthenticated, origin-form GET/HEAD
+`/proxy.pac` download. It contains routing metadata (node names, restricted DNS
+domains and approved subnet prefixes), never credentials. It follows the app
+listener's scope and is intentionally readable by reachable clients. The
+receiving socket determines the embedded proxy address; mismatched authorities
+and query parameters are rejected. Absolute-form requests and CONNECT still go
+through proxy authentication, including requests whose path is `/proxy.pac`.
+Browser listeners do not expose this download.
+
+The PAC script has no DIRECT fallback for protected matches, performs no
+client-side DNS resolution, and sends ordinary destinations DIRECT. iOS controls
+PAC loading, caching and authentication prompts; an unavailable PAC URL cannot
+provide an OS-level fail-closed guarantee. PAC is configuration for cooperating
+clients, not an access-control boundary or a replacement for proxy authentication.
+
 The macOS LaunchAgent accepts browser bridges on a mode-`0600` Unix socket and
 requires a random mode-`0600` bridge token before native-message framing begins.
 The bridge must then identify its browser profile in the first `init` message;

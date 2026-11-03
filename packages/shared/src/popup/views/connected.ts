@@ -698,6 +698,23 @@ function renderExternalProxyDetails(container: HTMLElement, details: ExternalPro
       actions.appendChild(copy);
     }
     fields.appendChild(actions);
+    if (details.pacPath) {
+      const row = document.createElement("div");
+      row.className = "proxy-detail-row";
+      const label = document.createElement("span");
+      label.className = "proxy-detail-label";
+      label.textContent = "Automatic";
+      const input = document.createElement("input");
+      input.readOnly = true;
+      input.value = `http://${externalProxyHost}:${details.port}${details.pacPath}`;
+      input.setAttribute("aria-label", "Automatic proxy URL");
+      row.append(label, input, createCopyButton(input.value, "PAC URL"));
+      fields.appendChild(row);
+      const help = document.createElement("p");
+      help.className = "proxy-connection-hint";
+      help.textContent = "Automatic routes tailnet destinations through this Mac and other websites directly. Proxy authentication is still required.";
+      fields.appendChild(help);
+    }
   }
   renderFields();
   const instructions = document.createElement("details");
@@ -707,6 +724,11 @@ function renderExternalProxyDetails(container: HTMLElement, details: ExternalPro
   const steps = document.createElement("p");
   steps.textContent = "Settings → Wi-Fi → your network → HTTP Proxy → Manual. Enter the selected LAN server and port, enable Authentication, then enter the username and password. Keep this Mac awake.";
   instructions.append(summary, steps);
+  if (details.pacPath) {
+    const automatic = document.createElement("p");
+    automatic.textContent = "To test Automatic: select the Mac’s Wi-Fi address above, copy the PAC URL into Wi-Fi → HTTP Proxy → Automatic → URL, then save. Safari may ask for the proxy username and password when opening a tailnet site. If authentication does not work, use Manual with Authentication. Reload Automatic after routing changes; update the URL if the Mac’s address changes.";
+    instructions.appendChild(automatic);
+  }
   if (details.allowLAN) card.appendChild(instructions);
   container.appendChild(card);
 }

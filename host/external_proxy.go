@@ -35,6 +35,7 @@ type ExternalProxyStatus struct {
 	Username     string   `json:"username,omitempty"`
 	Password     string   `json:"password,omitempty"`
 	Error        string   `json:"error,omitempty"`
+	PACPath      string   `json:"pacPath,omitempty"`
 }
 
 // externalProxy owns the app-facing proxy listener. It never reads browser
@@ -253,6 +254,9 @@ func (p *externalProxy) status(revealPassword bool) ExternalProxyStatus {
 	if p.config.AllowLAN {
 		status.LANAddresses = localProxyLANAddresses()
 	}
+	if p.listener != nil {
+		status.PACPath = externalProxyPACPath
+	}
 	if revealPassword {
 		status.Password = p.config.Password
 	}
@@ -291,7 +295,8 @@ func (p *externalProxy) startLocked() error {
 	p.listener = listener
 	p.lastError = ""
 	auth := &ProxyAuth{Version: 1, Username: p.config.Username, Password: p.config.Password}
-	p.host.serveAuthenticatedProxy(listener, auth, false)
+	handler := p.host.appProxyPACHandler(p.host.httpProxyHandlerWithAuth(auth, false))
+	p.host.serveAuthenticatedProxyWithHTTPHandler(listener, auth, false, handler)
 	return nil
 }
 
