@@ -12,7 +12,7 @@ host/                 # Native messaging host (Go)
 
 ## Requirements
 
-- Go 1.26.6+
+- Go 1.27.3+
 - Node.js 22+
 - pnpm
 - Chrome or Firefox for manual testing

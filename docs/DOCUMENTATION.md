@@ -98,7 +98,7 @@ Each browser profile has its own Tailscale identity. Different profiles can use 
 
 1. **Startup:** The extension opens a native messaging connection and sends `init` first. On macOS, the browser-launched process authenticates to the per-user LaunchAgent and bridges native frames; on other platforms the process hosts the session itself. The selected per-profile host binds an authenticated SOCKS5/HTTP browser proxy and sends `procRunning` with its port, credential, version, and capability flags.
 2. **Init:** The `init` message contains a browser-profile UUID (`initID`) and an optional `wantRunning` hint. The helper creates or reuses only that profile's `tsnet.Server`, with state stored at `~/.config/tailscale-browser-ext/<initID>/`. macOS keeps the profile resident without merging it with other Chrome or Firefox profiles. Because `tsnet.Start` forces `WantRunning=true`, the host applies `WantRunning=false` right after starting a fresh server when the hint is `false`.
-3. **State watching:** Host starts a goroutine (`watchIPNBus`) that monitors the IPN notification bus for state, prefs, netmap, browse-to-URL, and health changes. On any change, it fetches full status and sends a `StatusUpdate` to the extension.
+3. **State watching:** Host starts a goroutine (`watchIPNBus`) that monitors the IPN notification bus for state, prefs, initial status, self/peer, browse-to-URL, and health changes. Routing updates fetch authoritative node records and DNS configuration through LocalAPI; status updates are sent to the extension.
 4. **Proxy routing:** The background service worker receives the status, passes it to the `ProxyManager`, which configures browser-level proxy rules (PAC script on Chrome, `proxy.onRequest` on Firefox).
 5. **Popup:** When the user opens the popup, it connects via a `chrome.runtime.Port` named `"popup"`. The background immediately sends current `TailscaleState`. User actions dispatch `BackgroundMessage` types which the background translates to `NativeRequest` commands.
 6. **Optional local-app proxy (macOS):** The Advanced toggle asks the daemon to bind a second authenticated loopback listener. It supports HTTP proxying, HTTPS through CONNECT, and SOCKS5. It dials through the profile that enabled it, ignores browser split/bypass configuration, and stays available after the browser closes.
@@ -377,7 +377,7 @@ Defined in `packages/shared/src/constants.ts`:
 
 ## Native Host Internals
 
-The native host is a Go binary at `host/` using `tailscale.com/tsnet` pinned to `v1.103.0-pre.0.20260819151608-90ed0bcf4bc2`. This revision includes the UDP DNS routing fix and the security fixes from v1.102.3; see [Split DNS](split-dns.md).
+The native host is a Go binary at `host/` using `tailscale.com/tsnet` pinned to `v1.104.5`. This revision preserves the subnet UDP DNS fix and includes Tailscale's merged [UDP read-feedback recovery fix](https://github.com/tailscale/tailscale/pull/21902). A transient `network is unreachable` or `no route to host` read no longer terminates the receive worker permanently. This stable release requires Go 1.27.3; see [Split DNS](split-dns.md) and the [transport recovery tracker](design/specs/2026-1103-01-transport-recovery-and-pac.md).
 
 ### Files
 
@@ -409,7 +409,7 @@ The native host is a Go binary at `host/` using `tailscale.com/tsnet` pinned to 
 3. **Profile selection and proxy startup:** the daemon binds the bridge permanently to the supplied profile ID, creates or reuses that profile's `Host`, and starts its random authenticated browser proxy. Different profiles never share a `Host`, browser credential, listener, or tsnet state.
 4. **Extension receives `procRunning`** for its selected profile, including the browser proxy endpoint and daemon/external-proxy capabilities.
 5. **Host initializes `tsnet`** at `~/.config/tailscale-browser-ext/<ID>/`, restores the saved run intent, and keeps the session resident on macOS after all browser bridges close.
-6. **IPN bus watcher** monitors state, prefs, netmap, browse-to-URL, and health changes. Errors trigger bounded exponential retries; each change schedules a debounced full `StatusUpdate` from the same session snapshot.
+6. **IPN bus watcher** monitors state, prefs, initial status, self/peer, browse-to-URL, and health changes. Tailscale v1.104.5 no longer sends a full network map: the helper enumerates nodes with `Status`, fetches full records with `PeerByID` (including self), and obtains DNS settings with `DNSConfig`. Collections are checked against status before and after fetching to detect profile and route changes. Failed refreshes discard cached proxy permissions and trigger bounded exponential retries; each change schedules a debounced full `StatusUpdate` from the same session snapshot.
 7. **On browser EOF,** the bridge exits. On macOS the daemon-owned profile and optional app listener remain; elsewhere the in-process host shuts down its session.
 
 ### Proxy Architecture
@@ -961,7 +961,7 @@ tailchrome/
 
 ### Prerequisites
 
-- Go 1.26.6+ (per `host/go.mod`)
+- Go 1.27.3+ (per `host/go.mod`)
 - Node.js 22+
 - pnpm (via corepack)
 - Desktop Chrome or Firefox for testing
@@ -1439,7 +1439,7 @@ Full listing text: [STORE_LISTING.md](STORE_LISTING.md)
 ## Contributing
 
 1. Fork the repo and clone locally
-2. Install dependencies: Go 1.26.6+, Node.js 22+, pnpm (via `corepack enable`)
+2. Install dependencies: Go 1.27.3+, Node.js 22+, pnpm (via `corepack enable`)
 3. `pnpm install --frozen-lockfile`
 4. Build: `pnpm build:chrome`, `pnpm build:firefox`, `make host`
 5. Load extension in browser for testing:
@@ -1466,6 +1466,6 @@ Key dependencies in `host/go.mod`:
 
 | Dependency          | Version  | Purpose                                                |
 | ------------------- | -------- | ------------------------------------------------------ |
-| `tailscale.com`     | v1.103.0-pre.0.20260819151608-90ed0bcf4bc2 | tsnet, local client, IPN, socks5, proxymux, web client |
+| `tailscale.com`     | v1.104.5 | tsnet, local client, IPN, socks5, proxymux, web client |
 | `golang.org/x/term` | v0.45.0  | Terminal detection for auto-install                    |
 | `golang.org/x/sys`  | v0.47.0  | System calls                                           |

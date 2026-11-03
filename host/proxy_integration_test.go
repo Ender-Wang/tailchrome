@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netns"
 	"tailscale.com/tsnet"
@@ -53,24 +52,16 @@ func TestHTTPProxyServesAuthenticatedWebClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer watcher.Close()
-	notify, err := watcher.Next()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if notify.NetMap == nil {
-		t.Fatal("initial notification did not include a network map")
+	nm, err := currentNetworkMap(ctx, lc)
+	if err != nil || nm == nil {
+		t.Fatalf("initial network map: %v, %v", nm, err)
 	}
 
 	h := newHost(nil, io.Discard)
 	h.ts = node
 	h.lc = lc
 	h.sessionGeneration = 1
-	h.lastNetMap = notify.NetMap
+	h.lastNetMap = nm
 	h.proxyAuth = &ProxyAuth{Version: 1, Username: "test", Password: "test-password"}
 	t.Cleanup(func() {
 		h.sessionMu.Lock()
@@ -121,14 +112,14 @@ func TestHTTPProxyServesAuthenticatedWebClient(t *testing.T) {
 		t.Fatalf("auth response did not identify the local managing node: %s", authStatus.Body.String())
 	}
 
-	newAuth, err := h.webClientAuthRequest(ctx, node, lc, 1, "", notify.NetMap.SelfNode.ID())
+	newAuth, err := h.webClientAuthRequest(ctx, node, lc, 1, "", nm.SelfNode.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if newAuth.ID != "testcontrol-webclient-auth" || newAuth.URL != "https://control.tailscale/test-web-auth" {
 		t.Fatalf("new auth response = %+v", newAuth)
 	}
-	waitAuth, err := h.webClientAuthRequest(ctx, node, lc, 1, newAuth.ID, notify.NetMap.SelfNode.ID())
+	waitAuth, err := h.webClientAuthRequest(ctx, node, lc, 1, newAuth.ID, nm.SelfNode.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,24 +275,16 @@ func TestHTTPProxyWebLogoutDrainsMutationAndResetsProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { watcher.Close() })
-	notify, err := watcher.Next()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if notify.NetMap == nil {
-		t.Fatal("initial notification did not include a network map")
+	nm, err := currentNetworkMap(ctx, lc)
+	if err != nil || nm == nil {
+		t.Fatalf("initial network map: %v, %v", nm, err)
 	}
 
 	h := newHost(nil, io.Discard)
 	h.ts = node
 	h.lc = lc
 	h.sessionGeneration = 1
-	h.lastNetMap = notify.NetMap
+	h.lastNetMap = nm
 	h.proxyAuth = &ProxyAuth{Version: 1, Username: "test", Password: "test-password"}
 	t.Cleanup(func() {
 		h.sessionMu.Lock()
@@ -333,14 +316,14 @@ func TestHTTPProxyWebLogoutDrainsMutationAndResetsProfile(t *testing.T) {
 	if response := request("/api/auth"); response.Code != http.StatusOK {
 		t.Fatalf("auth status = %d; body: %s", response.Code, response.Body.String())
 	}
-	newAuth, err := h.webClientAuthRequest(ctx, node, lc, 1, "", notify.NetMap.SelfNode.ID())
+	newAuth, err := h.webClientAuthRequest(ctx, node, lc, 1, "", nm.SelfNode.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if newAuth.ID != "testcontrol-webclient-auth" {
 		t.Fatalf("new auth response = %+v", newAuth)
 	}
-	if _, err := h.webClientAuthRequest(ctx, node, lc, 1, newAuth.ID, notify.NetMap.SelfNode.ID()); err != nil {
+	if _, err := h.webClientAuthRequest(ctx, node, lc, 1, newAuth.ID, nm.SelfNode.ID()); err != nil {
 		t.Fatal(err)
 	}
 	newSession := request("/api/auth/session/new")

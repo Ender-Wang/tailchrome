@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"golang.org/x/net/proxy"
-	"tailscale.com/ipn"
 	"tailscale.com/ipn/store/mem"
 	"tailscale.com/net/netns"
 	"tailscale.com/tsnet"
@@ -60,17 +59,13 @@ func TestSOCKSProxyServesAuthenticatedWebClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
-	if err != nil {
-		t.Fatal(err)
+	nm, err := currentNetworkMap(ctx, lc)
+	if err != nil || nm == nil {
+		t.Fatalf("initial network map: %v, %v", nm, err)
 	}
-	t.Cleanup(func() { watcher.Close() })
-	notify, err := watcher.Next()
-	if err != nil || notify.NetMap == nil {
-		t.Fatalf("initial network map: %v, %v", notify, err)
-	}
+
 	h := newHost(nil, io.Discard)
-	h.ts, h.lc, h.sessionGeneration, h.lastNetMap = node, lc, 1, notify.NetMap
+	h.ts, h.lc, h.sessionGeneration, h.lastNetMap = node, lc, 1, nm
 	t.Cleanup(h.shutdownSession)
 	port, err := h.startProxy()
 	if err != nil {

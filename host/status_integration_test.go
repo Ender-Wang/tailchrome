@@ -44,6 +44,10 @@ func TestWatchIPNBusPublishesControlPlaneDNSChanges(t *testing.T) {
 	}
 	control.AddFakeNode()
 	router := control.AllNodes()[0]
+	// AddFakeNode derives a signed ID from random bytes, which can be negative.
+	// The production PeerByID API correctly accepts only positive node IDs.
+	router.ID = 1
+	control.UpdateNode(router)
 	subnet := netip.MustParsePrefix("10.44.0.0/24")
 	control.SetSubnetRoutes(router.Key, []netip.Prefix{subnet})
 	control.HTTPTestServer = httptest.NewUnstartedServer(control)
@@ -71,6 +75,10 @@ func TestWatchIPNBusPublishesControlPlaneDNSChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	initialMap, err := currentNetworkMap(ctx, lc)
+	if err != nil || initialMap == nil {
+		t.Fatalf("initial authoritative map: %v, %v", initialMap, err)
+	}
 
 	writer, reader := net.Pipe()
 	defer writer.Close()
@@ -79,7 +87,11 @@ func TestWatchIPNBusPublishesControlPlaneDNSChanges(t *testing.T) {
 	h.ts, h.lc = node, lc
 	watchCtx, stopWatch := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	go func() { done <- h.watchIPNBusSession(watchCtx, lc, 0) }()
+	go func() {
+		err := h.watchIPNBusSession(watchCtx, lc, 0)
+		t.Logf("watcher stopped: %v", err)
+		done <- err
+	}()
 	defer func() {
 		stopWatch()
 		select {

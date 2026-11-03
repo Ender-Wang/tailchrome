@@ -45,7 +45,7 @@ func (h *Host) watchIPNBus(ctx context.Context, lc *local.Client, generation uin
 }
 
 func (h *Host) watchIPNBusSession(ctx context.Context, lc *local.Client, generation uint64) error {
-	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyInitialPrefs|ipn.NotifyInitialNetMap|ipn.NotifyInitialHealthState|ipn.NotifyPeerChanges)
+	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyInitialPrefs|ipn.NotifyInitialStatus|ipn.NotifyInitialHealthState|ipn.NotifyPeerChanges)
 	if err != nil {
 		return err
 	}
@@ -112,17 +112,27 @@ func (h *Host) watchIPNBusSession(ctx context.Context, lc *local.Client, generat
 		prefsChanged := n.Prefs != nil && n.Prefs.Valid()
 		browseURLChanged := n.BrowseToURL != nil
 		healthChanged := n.Health != nil
-		netMapChanged := n.NetMap != nil || n.SelfChange != nil
+		resetMap := stateChanged && (*n.State == ipn.NoState || *n.State == ipn.NeedsLogin)
+		netMapChanged := n.InitialStatus != nil || n.SessionID != "" || n.SelfChange != nil || resetMap
 		peersChanged := n.PeersChanged != nil || n.PeersRemoved != nil
 		changed := stateChanged || prefsChanged || browseURLChanged || netMapChanged || peersChanged || healthChanged
-		currentMap := n.NetMap
-		if currentMap == nil && (n.SelfChange != nil || peersChanged) {
-			// Runtime netmaps are only sent on Windows. Refresh a full snapshot
-			// for both DNS routing and the proxy's authoritative route policy.
+		var currentMap *netmap.NetworkMap
+		if !resetMap && (netMapChanged || peersChanged) {
+			// Notifications no longer carry a full netmap. Fetch authoritative
+			// nodes and DNS configuration from the replacement LocalAPI methods.
 			mapCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			currentMap, err = currentNetworkMap(mapCtx, lc)
 			cancel()
 			if err != nil {
+				// Never leave stale route permissions usable while reconnecting.
+				h.sessionMu.RLock()
+				if h.lc == lc && h.sessionGeneration == generation {
+					h.stateMu.Lock()
+					h.lastNetMap = nil
+					h.lastSplitDNSDomains = nil
+					h.stateMu.Unlock()
+				}
+				h.sessionMu.RUnlock()
 				// Reconnect the watcher to recover a complete initial snapshot
 				// rather than leave this configuration change unprocessed.
 				return fmt.Errorf("failed to refresh network map: %w", err)
@@ -175,12 +185,6 @@ func (h *Host) watchIPNBusSession(ctx context.Context, lc *local.Client, generat
 				if currentMap != nil {
 					h.lastSplitDNSDomains = configuredSplitDNSDomains(&currentMap.DNS)
 				}
-			} else if n.SessionID != "" || (stateChanged && (*n.State == ipn.NoState || *n.State == ipn.NeedsLogin)) {
-				// An initial snapshot without a netmap replaces any old routes.
-				// Profile changes and logout also clear the backend's netmap,
-				// but a nil NetMap is omitted from the notification stream.
-				h.lastSplitDNSDomains = nil
-				h.lastNetMap = nil
 			}
 			h.stateMu.Unlock()
 			h.sessionMu.RUnlock()
@@ -189,20 +193,76 @@ func (h *Host) watchIPNBusSession(ctx context.Context, lc *local.Client, generat
 	}
 }
 
-// currentNetworkMap reads the authoritative snapshot that Tailscale provides
-// when a watcher subscribes. Unlike runtime NetMap notifications, this snapshot
-// is available on every platform and includes the full peer routing policy.
+// currentNetworkMap collects the authoritative nodes and DNS configuration.
+// Status is used to enumerate nodes, never to invent route permissions or peer
+// capabilities. Reject a collection spanning a profile or routing change.
 func currentNetworkMap(ctx context.Context, lc *local.Client) (*netmap.NetworkMap, error) {
-	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
+	status, err := lc.Status(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer watcher.Close()
-	n, err := watcher.Next()
+	if status.Self == nil || !status.Self.InNetworkMap {
+		return nil, nil
+	}
+	self, err := lc.PeerByID(ctx, status.Self.NodeID)
+	if err != nil {
+		return nil, fmt.Errorf("fetch self node %d: %w", status.Self.NodeID, err)
+	}
+	nm := &netmap.NetworkMap{SelfNode: self.View()}
+	for _, peer := range status.Peer {
+		// Status also contains engine peers retained after removal from the
+		// control-plane map. They are not members of this policy snapshot.
+		if !peer.InNetworkMap {
+			continue
+		}
+		node, err := lc.PeerByID(ctx, peer.NodeID)
+		if err != nil {
+			return nil, fmt.Errorf("fetch peer node %d: %w", peer.NodeID, err)
+		}
+		nm.Peers = append(nm.Peers, node.View())
+	}
+	dns, err := lc.DNSConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return n.NetMap, nil
+	if dns == nil {
+		return nil, fmt.Errorf("DNS configuration unavailable")
+	}
+	nm.DNS = *dns
+	latest, err := lc.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+	currentPeers := 0
+	for _, peer := range latest.Peer {
+		if peer.InNetworkMap {
+			currentPeers++
+		}
+	}
+	if !nodeMatchesStatus(nm.SelfNode, status.Self) || !nodeMatchesStatus(nm.SelfNode, latest.Self) || len(nm.Peers) != currentPeers {
+		return nil, fmt.Errorf("profile or routes changed while collecting network map")
+	}
+	for _, node := range nm.Peers {
+		if !nodeMatchesStatus(node, status.Peer[node.Key()]) || !nodeMatchesStatus(node, latest.Peer[node.Key()]) {
+			return nil, fmt.Errorf("peers or routes changed while collecting network map")
+		}
+	}
+	return nm, nil
+}
+
+func nodeMatchesStatus(node tailcfg.NodeView, status *ipnstate.PeerStatus) bool {
+	if !node.Valid() || status == nil || node.ID() != status.NodeID || node.StableID() != status.ID || node.Key() != status.PublicKey || node.Name() != status.DNSName {
+		return false
+	}
+	allowedMatch := node.AllowedIPs().Len() == 0
+	if status.AllowedIPs != nil {
+		allowedMatch = slices.Equal(node.AllowedIPs().AsSlice(), status.AllowedIPs.AsSlice())
+	}
+	primaryMatch := node.PrimaryRoutes().Len() == 0
+	if status.PrimaryRoutes != nil {
+		primaryMatch = slices.Equal(node.PrimaryRoutes().AsSlice(), status.PrimaryRoutes.AsSlice())
+	}
+	return status.InNetworkMap && allowedMatch && primaryMatch
 }
 
 func prefsViewFromIPN(p ipn.PrefsView) *PrefsView {

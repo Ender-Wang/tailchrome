@@ -6,6 +6,9 @@ Status: Implemented; iPhone-to-NAS HTTPS access verified on 2026-11-02.
 
 Extends [the resident helper and local-app proxy design](2026-09-24-local-app-proxy-design.md).
 
+Network-transition recovery and the separately deferred PAC setup are tracked
+in [transport recovery and selective proxy routing](2026-1103-01-transport-recovery-and-pac.md).
+
 ## Goal
 
 An iPhone on the same trusted network can access tailnet HTTP/HTTPS services

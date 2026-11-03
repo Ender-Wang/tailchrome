@@ -107,6 +107,10 @@ settings. It sees only proxy destination host/port values. Accepting a request
 means “attempt this through the selected Tailchrome node”; an unavailable or
 unauthorized route is an error.
 
+The [transport recovery upgrade](2026-1103-01-transport-recovery-and-pac.md)
+updates the embedded Tailscale dependency and its route/DNS data APIs while
+preserving these proxy boundaries.
+
 ### Chromium authentication probe
 
 Chromium cannot expose another extension's proxy authentication challenge to

@@ -217,6 +217,12 @@ Every destination submitted by the application is checked against the helper's
 current Tailscale routes and preferences, then routed through `tsnet` or
 rejected. There is no direct-network fallback.
 
+For troubleshooting network transitions, see the [transport recovery
+tracker](design/specs/2026-1103-01-transport-recovery-and-pac.md). The updated
+embedded transport retries transient UDP reachability errors instead of
+permanently losing its receive worker. Switching Wi-Fi can still interrupt
+existing TCP streams; applications must reconnect after the network returns.
+
 ## Removal
 
 `tailchrome uninstall` removes registrations owned by that executable and keeps

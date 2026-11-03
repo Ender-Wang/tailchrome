@@ -177,18 +177,11 @@ func TestSplitDNSThroughSubnetRouter(t *testing.T) {
 	if _, err := lc.Ping(ctx, routerStatus.TailscaleIPs[0], tailcfg.PingTSMP); err != nil {
 		t.Fatal(err)
 	}
-	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialNetMap)
-	if err != nil {
-		t.Fatal(err)
+	nm, err := currentNetworkMap(ctx, lc)
+	if err != nil || nm == nil {
+		t.Fatalf("initial network map: %v, %v", nm, err)
 	}
-	notification, err := watcher.Next()
-	watcher.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if notification.NetMap == nil {
-		t.Fatal("missing authoritative network map")
-	}
+
 	prefs, err := lc.GetPrefs(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -204,7 +197,7 @@ func TestSplitDNSThroughSubnetRouter(t *testing.T) {
 				if network != transport {
 					return nil, fmt.Errorf("probe uses only %s", transport)
 				}
-				return dialProxyDNS(ctx, client, notification.NetMap, prefs, network, address)
+				return dialProxyDNS(ctx, client, nm, prefs, network, address)
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -219,7 +212,7 @@ func TestSplitDNSThroughSubnetRouter(t *testing.T) {
 	}
 	sawA.Store(false)
 	sawAAAA.Store(false)
-	host := &Host{ts: client, lc: lc, lastNetMap: notification.NetMap, lastSplitDNSDomains: configuredSplitDNSDomains(config), lastPrefs: &PrefsView{CorpDNS: true}}
+	host := &Host{ts: client, lc: lc, lastNetMap: nm, lastSplitDNSDomains: configuredSplitDNSDomains(config), lastPrefs: &PrefsView{CorpDNS: true}}
 	conn, err := host.tsnetDialer(ctx, "tcp", "service.internal.example.com:80")
 	if err != nil {
 		t.Fatal(err)
@@ -249,7 +242,7 @@ func splitDNSTestDERP(t *testing.T) *tailcfg.DERPMap {
 		relay.Close()
 		closeSTUN()
 	})
-	return &tailcfg.DERPMap{Regions: map[int]*tailcfg.DERPRegion{
+	return &tailcfg.DERPMap{Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
 		1: {
 			RegionID: 1, RegionCode: "test", Nodes: []*tailcfg.DERPNode{{
 				Name: "test", RegionID: 1, HostName: "127.0.0.1", IPv4: "127.0.0.1", IPv6: "none",
